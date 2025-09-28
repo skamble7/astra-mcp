@@ -1,0 +1,37 @@
+[build-system]
+requires = ["hatchling>=1.25.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mcp-git-repo-snapshot"
+version = "0.1.1"
+description = "MCP server (stdio) that clones a Git repo into a given volume and returns cam.asset.repo_snapshot"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+authors = [{ name = "Astra Team" }]
+
+# ✅ Dependencies belong here (NOT under [project.scripts])
+dependencies = [
+  "mcp[cli]>=1.0.0",
+  "GitPython>=3.1.43",
+  "pydantic>=2.7.4",
+  "pydantic-core>=2.18.4",
+  "typing-extensions>=4.12.2",
+  "jsonschema>=4.23.0",
+]
+
+# ✅ Console entry point goes here
+[project.scripts]
+mcp-git-repo-snapshot = "mcp_git_repo_snapshot.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mcp_git_repo_snapshot"]
+
+[tool.ruff]
+select = ["E", "F", "I"]
+line-length = 100
+
+[tool.mypy]
+python_version = "3.11"
+strict = false

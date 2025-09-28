@@ -1,0 +1,93 @@
+{
+  "_id": "cam.asset.repo_snapshot",
+  "title": "Repository Snapshot",
+  "category": "generic",
+  "aliases": [
+    "cam.asset.git_snapshot"
+  ],
+  "status": "active",
+  "latest_schema_version": "1.0.0",
+  "schema_versions": [
+    {
+      "version": "1.0.0",
+      "json_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "repo",
+          "commit",
+          "branch",
+          "paths_root"
+        ],
+        "properties": {
+          "repo": {
+            "type": "string",
+            "description": "Remote URL or origin name"
+          },
+          "commit": {
+            "type": "string"
+          },
+          "branch": {
+            "type": "string"
+          },
+          "paths_root": {
+            "type": "string",
+            "description": "Filesystem mount/volume path used by tools"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "additional_props_policy": "forbid",
+      "prompt": {
+        "system": "Validate and normalize a Git snapshot into strict JSON. Do not invent fields.",
+        "strict_json": true
+      },
+      "identity": {
+        "natural_key": [
+          "repo",
+          "commit"
+        ]
+      },
+      "examples": [
+        {
+          "repo": "https://git.example.com/legacy/cards.git",
+          "commit": "8f2c1b...",
+          "branch": "main",
+          "paths_root": "/mnt/src/cards"
+        }
+      ],
+      "diagram_recipes": [
+        {
+          "id": "repo.mindmap",
+          "title": "Repo Snapshot Mindmap",
+          "view": "mindmap",
+          "language": "mermaid",
+          "description": "Quick overview of repo → branch/commit and tags.",
+          "template": "mindmap\n  root(({{ data.repo }}))\n    Branch: {{ data.branch }}\n    Commit: {{ data.commit }}\n    Paths Root: {{ data.paths_root }}\n    Tags\n      {% for t in (data.tags or []) %}{{ t }}\n      {% endfor %}"
+        }
+      ],
+      "narratives_spec": {
+        "allowed_formats": [
+          "markdown",
+          "asciidoc"
+        ],
+        "default_format": "markdown",
+        "max_length_chars": 20000,
+        "allowed_locales": [
+          "en-US"
+        ]
+      }
+    }
+  ],
+  "created_at": {
+    "$date": "2025-09-28T18:03:04.464Z"
+  },
+  "updated_at": {
+    "$date": "2025-09-28T18:03:06.481Z"
+  }
+}

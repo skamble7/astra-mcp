@@ -1,0 +1,19 @@
+# This file is managed by uv
+# To regenerate, run: uv lock
+version = 1
+requires-python = ">=3.10"
+
+[[package]]
+name = "astra-mcp"
+version = "0.1.0"
+source = { editable = "." }
+
+[package.optional-dependencies]
+dev = [
+    { name = "ruff" },
+    { name = "mypy" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-cov" },
+    { name = "uv" },
+]

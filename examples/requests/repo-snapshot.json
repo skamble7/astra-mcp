@@ -1,0 +1,14 @@
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "tools/call",
+  "params": {
+    "name": "clone_repo",
+    "arguments": {
+      "repo_url": "https://github.com/octocat/Hello-World.git",
+      "volume_path": "/tmp/mcp_repos",
+      "branch": "master",
+      "depth": 1
+    }
+  }
+}
