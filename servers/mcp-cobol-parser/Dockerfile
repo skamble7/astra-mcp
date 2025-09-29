@@ -30,6 +30,8 @@ COPY README.md ./
 COPY mcp_cobol_parser/ ./mcp_cobol_parser/
 # Java sources for the small bridge CLIs
 COPY vendor-src/proleap/ ./vendor-src/proleap/
+# Prebuilt cb2xml jars (expected: cb2xml.jar, cb2xml_Jaxb.jar, cb2xml_definitions.jar)
+COPY vendor/cb2xml/ /app/vendor/cb2xml/
 
 # --- Install python deps
 RUN pip install --upgrade pip && \
@@ -76,18 +78,30 @@ ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 \
     WORKERS=8 \
     CACHE_DIR=/app/.cache \
     LOG_LEVEL=INFO \
-    # We’re not wiring cb2xml yet; STRICT_CB2XML=true will fail fast if asked.
-    CB2XML_JAR= \
-    CB2XML_CP= \
-    CB2XML_MAIN= \
+    \
+    # === CB2XML configuration ===
+    # Point directly at the main cb2xml jar (error previously showed JAR=None).
+    CB2XML_JAR=/app/vendor/cb2xml/cb2xml.jar \
+    # Full classpath for cb2xml including its deps.
+    CB2XML_CP=/app/vendor/cb2xml/cb2xml.jar:/app/vendor/cb2xml/cb2xml_Jaxb.jar:/app/vendor/cb2xml/cb2xml_definitions.jar \
+    # Main class used by the server to invoke cb2xml.
+    CB2XML_MAIN=net.sf.cb2xml.Cb2Xml \
+    \
     # ProLeap: use our freshly built bridge + libs
     PROLEAP_JAR=/app/vendor/proleap/proleap-bridge.jar \
     PROLEAP_CP=/app/vendor/proleap/lib/* \
     # Default to the richer JSON bridge
     PROLEAP_MAIN=com.astra.proleap.JsonCli \
+    \
     # Keep strict so we never silently fall back
     STRICT_PROLEAP=true \
     STRICT_CB2XML=true
+
+# --- Verify expected jars exist (fail fast at build time)
+RUN set -eux; \
+  test -f "$CB2XML_JAR"; \
+  for f in $(echo "$CB2XML_CP" | tr ':' ' '); do test -f "$f"; done; \
+  test -f "$PROLEAP_JAR"
 
 EXPOSE 8765
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
