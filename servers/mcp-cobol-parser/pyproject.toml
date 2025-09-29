@@ -1,0 +1,38 @@
+[build-system]
+requires = ["hatchling>=1.25.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mcp-cobol-parser"
+version = "0.1.0"
+description = "SSE MCP server that parses COBOL repos (ProLeap + CB2XML) and pages artifacts"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+authors = [{ name = "Astra Team" }]
+
+# ✅ Use the new SDK, like your git-repo-snapshot (cli there, server/SSE here)
+dependencies = [
+  "mcp[server]>=1.0.0",
+  "uvicorn>=0.30",
+  "starlette>=0.36,<0.38",
+  "pydantic>=2.7.4",
+  "orjson>=3.10",
+  "python-dotenv>=1.0",
+  "aiofiles>=24.1",
+  "xmltodict>=0.13",
+]
+
+[project.scripts]
+mcp-cobol-parser = "mcp_cobol_parser.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["mcp_cobol_parser"]
+
+[tool.ruff]
+select = ["E", "F", "I"]
+line-length = 100
+
+[tool.mypy]
+python_version = "3.11"
+strict = false
