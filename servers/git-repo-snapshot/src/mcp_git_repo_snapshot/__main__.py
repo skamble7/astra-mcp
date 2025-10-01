@@ -1,8 +1,9 @@
-# servers/git-repo-snapshot/src/mcp_git_repo_snapshot/__main__.py
 from __future__ import annotations
+import sys
 from .server import mcp
 
 def main() -> None:
+    print(">>> starting git-repo-snapshot MCP server (stdio)…", file=sys.stderr, flush=True)
     mcp.run(transport="stdio")
 
 if __name__ == "__main__":

@@ -1,3 +1,4 @@
+# File: servers/git-repo-snapshot/src/mcp_git_repo_snapshot/tools/clone_repo.py
 from __future__ import annotations
 
 import os
