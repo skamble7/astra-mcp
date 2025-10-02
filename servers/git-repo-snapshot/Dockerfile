@@ -1,36 +1,35 @@
+# servers/git-repo-snapshot/Dockerfile
 FROM python:3.11-slim
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    git \
-    && rm -rf /var/lib/apt/lists/*
-
-# Set working directory
+RUN apt-get update && apt-get install -y git curl && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 
-# Copy requirements and install Python dependencies
 COPY pyproject.toml ./
-RUN pip install -e .[sse]
+# install base (stdio) and optionally sse extras
+ARG EXTRAS=""
+RUN pip install -e .${EXTRAS:+[${EXTRAS}]}
 
-# Copy source code
 COPY src/ ./src/
 COPY .env.example ./.env
 
-# Create non-root user
+# non-root
 RUN useradd -m -u 1000 mcp && chown -R mcp:mcp /app
 USER mcp
 
-# Expose port for SSE mode
+ENV PYTHONPATH=/app/src
+ENV MCP_TRANSPORT=stdio
+ENV MCP_PORT=8000
+
 EXPOSE 8000
 
-# Set environment variables
-ENV MCP_TRANSPORT=sse
-ENV MCP_PORT=8000
-ENV PYTHONPATH=/app/src
-
-# Health check
+# Healthcheck only makes sense in SSE mode; keep it but don’t break stdio
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
+  CMD [ "/bin/sh", "-c", "[ \"$MCP_TRANSPORT\" = \"sse\" ] && curl -fsS http://localhost:${MCP_PORT}/health || exit 0" ]
 
-# Run the server
-CMD ["uvicorn", "mcp_git_repo_snapshot.transports.sse:app", "--host", "0.0.0.0", "--port", "8000"]
+# Switch on transport at runtime
+CMD ["/bin/sh", "-lc", "\
+  if [ \"$MCP_TRANSPORT\" = \"sse\" ]; then \
+    exec uvicorn mcp_git_repo_snapshot.transports.sse:app --host 0.0.0.0 --port ${MCP_PORT}; \
+  else \
+    exec mcp-git-repo-snapshot; \
+  fi"]

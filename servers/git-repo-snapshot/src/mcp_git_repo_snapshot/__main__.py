@@ -1,3 +1,4 @@
+# servers/git-repo-snapshot/src/mcp_git_repo_snapshot/__main__.py
 from __future__ import annotations
 from .server import mcp
 
