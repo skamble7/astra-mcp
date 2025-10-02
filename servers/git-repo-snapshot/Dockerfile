@@ -1,35 +1,35 @@
-# servers/git-repo-snapshot/Dockerfile
 FROM python:3.11-slim
 
 RUN apt-get update && apt-get install -y git curl && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 
+# Ensure hatchling can see README during build
 COPY pyproject.toml ./
-# install base (stdio) and optionally sse extras
-ARG EXTRAS=""
-RUN pip install -e .${EXTRAS:+[${EXTRAS}]}
-
+COPY README.md ./
 COPY src/ ./src/
-COPY .env.example ./.env
 
-# non-root
+# Optional extras: pass EXTRAS="sse" to install server with ASGI deps
+ARG EXTRAS=""
+RUN python -m pip install --upgrade pip && \
+    if [ -n "$EXTRAS" ]; then \
+      echo "Installing with extras: ${EXTRAS}" && pip install -e ".[${EXTRAS}]"; \
+    else \
+      echo "Installing base package" && pip install -e .; \
+    fi
+
+# Non-root
 RUN useradd -m -u 1000 mcp && chown -R mcp:mcp /app
 USER mcp
 
-ENV PYTHONPATH=/app/src
-ENV MCP_TRANSPORT=stdio
-ENV MCP_PORT=8000
+ENV PYTHONPATH=/app/src \
+    MCP_TRANSPORT=sse \
+    MCP_PORT=8000
 
 EXPOSE 8000
 
-# Healthcheck only makes sense in SSE mode; keep it but don’t break stdio
+# Health for SSE
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD [ "/bin/sh", "-c", "[ \"$MCP_TRANSPORT\" = \"sse\" ] && curl -fsS http://localhost:${MCP_PORT}/health || exit 0" ]
+  CMD [ "/bin/sh", "-c", "curl -fsS http://localhost:${MCP_PORT}/health || exit 1" ]
 
-# Switch on transport at runtime
-CMD ["/bin/sh", "-lc", "\
-  if [ \"$MCP_TRANSPORT\" = \"sse\" ]; then \
-    exec uvicorn mcp_git_repo_snapshot.transports.sse:app --host 0.0.0.0 --port ${MCP_PORT}; \
-  else \
-    exec mcp-git-repo-snapshot; \
-  fi"]
+# Run SSE by default (stdio still available via console script)
+CMD ["/bin/sh", "-lc", "exec uvicorn mcp_git_repo_snapshot.transports.sse:app --host 0.0.0.0 --port ${MCP_PORT}"]

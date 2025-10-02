@@ -1,0 +1,35 @@
+services:
+  mcp-git-repo-snapshot:
+    build:
+      context: ../servers/git-repo-snapshot
+      dockerfile: Dockerfile
+      args:
+        EXTRAS: "sse"                 # 👈 no square brackets
+    image: astra/mcp-git-repo-snapshot:local
+    container_name: mcp-git-repo-snapshot
+    restart: unless-stopped
+    environment:
+      MCP_PORT: ${GIT_SNAPSHOT_PORT:-8000}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    ports:
+      - "${GIT_SNAPSHOT_PORT:-8000}:8000"
+    volumes:
+      - ${WORKSPACE_HOST_DIR:-../data/workspace}:/workspace
+
+  mcp-cobol-parser:
+    build:
+      context: ../servers/mcp-cobol-parser
+      dockerfile: Dockerfile
+    image: astra/mcp-cobol-parser:local
+    container_name: mcp-cobol-parser
+    restart: unless-stopped
+    environment:
+      PAGE_SIZE: 100
+      MAX_PAGE_SIZE: 500
+      WORKERS: 8
+      CACHE_DIR: /app/.cache
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    ports:
+      - "${COBOL_PARSER_PORT:-8765}:8765"
+    volumes:
+      - ${WORKSPACE_HOST_DIR:-../data/workspace}:/workspace

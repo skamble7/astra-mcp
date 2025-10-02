@@ -4,24 +4,33 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mcp-git-repo-snapshot"
-version = "0.1.1"
-description = "MCP server (stdio) that clones a Git repo into a given volume and returns cam.asset.repo_snapshot"
+version = "0.1.2"
+description = "MCP server that clones a Git repo and returns cam.asset.repo_snapshot"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
 authors = [{ name = "Astra Team" }]
 
-# ✅ Dependencies belong here (NOT under [project.scripts])
 dependencies = [
-  "mcp[cli]>=1.0.0",
+  "mcp[server]>=1.2.0,<2",
   "GitPython>=3.1.43",
   "pydantic>=2.7.4",
   "pydantic-core>=2.18.4",
   "typing-extensions>=4.12.2",
   "jsonschema>=4.23.0",
+  # add ASGI runtime unconditionally
+  "uvicorn>=0.30",
+  "starlette>=0.36,<0.38",
 ]
 
-# ✅ Console entry point goes here
+
+[project.optional-dependencies]
+# Install this extra to run via SSE (adds ASGI runtime)
+sse = [
+  "uvicorn>=0.30",
+  "starlette>=0.36,<0.38"
+]
+
 [project.scripts]
 mcp-git-repo-snapshot = "mcp_git_repo_snapshot.__main__:main"
 

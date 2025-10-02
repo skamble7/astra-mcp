@@ -47,13 +47,22 @@ def _clone_or_update_repo(
     """
     if (target_dir / ".git").exists():
         repo = Repo(str(target_dir))
-        # fetch updates
+        # Fetch updates without tags and avoid blobs when possible
         try:
-            repo.remotes.origin.fetch()
+            # GitPython doesn't expose "--filter=blob:none" directly on fetch,
+            # but we can pass it via git.execute using extra args.
+            repo.remotes.origin.fetch(
+                prune=True,
+                tags=False,
+                no_tags=True,        # extra safety; maps to --no-tags
+            )
         except GitCommandError as e:
             raise RuntimeError(f"git fetch failed: {e}") from e
     else:
-        clone_kwargs = {}
+        # Shallow + filtered clone defaults for speed
+        clone_kwargs: Dict[str, Any] = {
+            "multi_options": ["--filter=blob:none", "--no-tags"],
+        }
         if depth and depth > 0:
             clone_kwargs["depth"] = depth
             clone_kwargs["single_branch"] = True
@@ -71,13 +80,22 @@ def _clone_or_update_repo(
     else:
         # Resolve default branch from origin/HEAD if possible
         try:
-            checkout_ref = repo.git.symbolic_ref("refs/remotes/origin/HEAD")
+            ref = repo.git.symbolic_ref("refs/remotes/origin/HEAD")
             # e.g. "refs/remotes/origin/main" -> "main"
-            checkout_ref = checkout_ref.rsplit("/", 1)[-1]
+            checkout_ref = ref.rsplit("/", 1)[-1]
         except GitCommandError:
-            # fallback to 'main' then 'master'
+            # fallback: prefer main, then master
             names = {r.name for r in repo.remotes.origin.refs}
-            checkout_ref = "main" if "origin/main" in names or "main" in names else "master"
+            if "origin/main" in names or "main" in names:
+                checkout_ref = "main"
+            elif "origin/master" in names or "master" in names:
+                checkout_ref = "master"
+            else:
+                # last resort: stay on current HEAD's branch or detach
+                try:
+                    checkout_ref = repo.active_branch.name  # type: ignore[attr-defined]
+                except Exception:
+                    checkout_ref = "HEAD"
 
     # Checkout
     try:
@@ -103,11 +121,11 @@ def _tags_pointing_at_head(repo: Repo) -> List[str]:
         return []
 
 
-async def clone_repo_tool(params: Dict[str, Any]) -> Dict[str, Any]:
+def clone_repo_tool(params: Dict[str, Any]) -> Dict[str, Any]:
     """
-    MCP tool handler: clones a repo into a given volume and returns the 'data'
-    object for cam.asset.repo_snapshot (strict shape). The MCP SDK will JSON-serialize
-    the dict you return.
+    Blocking clone/update that returns the strict 'data' payload.
+    NOTE: This function is intentionally synchronous; the server schedules it
+    off the event loop using asyncio.to_thread().
     """
     validated = CloneRepoParams.model_validate(params)
 
