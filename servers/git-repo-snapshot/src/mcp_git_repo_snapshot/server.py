@@ -3,24 +3,34 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+import logging
+import os
 from typing import Literal, Optional, Dict, Any
 
 from mcp.server.fastmcp import FastMCP
 from .models.repo_snapshot import RepoSnapshot
 from .tools.clone_repo import clone_repo_tool
 
-mcp = FastMCP("git-repo-snapshot")
+logger = logging.getLogger("mcp.git-repo-snapshot.server")
 
-# In-memory job table (you can swap to a file/db if you want persistence)
-_JOBS: dict[str, dict[str, Any]] = {}   # { job_id: {status, result, error, started_at, ...} }
+# Configure FastMCP. Defaults to stateful streamable HTTP (production).
+# You can flip stateless/json for quick curl tests by env (see __main__.py).
+mcp = FastMCP(
+    "git-repo-snapshot",
+    # You can also set these via env using __main__.py (mcp.settings.*):
+    # stateless_http=True,
+    # json_response=True,
+)
+
+# In-memory job table
+_JOBS: dict[str, dict[str, Any]] = {}
 
 
 async def _run_clone_job(job_id: str, args: dict[str, Any]) -> None:
     _JOBS[job_id]["status"] = "running"
     try:
-        # Run the blocking Git work off the event loop
         data = await asyncio.to_thread(clone_repo_tool, args)
-        _JOBS[job_id]["result"] = data             # strict RepoSnapshot shape
+        _JOBS[job_id]["result"] = data
         _JOBS[job_id]["status"] = "done"
     except Exception as e:
         _JOBS[job_id]["error"] = str(e)
@@ -32,10 +42,9 @@ async def git_repo_snapshot_start(
     repo_url: str,
     volume_path: str,
     branch: Optional[str] = None,
-    depth: Optional[int] = 1,   # default to shallow for speed
+    depth: Optional[int] = 1,
     auth_mode: Optional[Literal["https", "ssh"]] = None,
 ) -> dict:
-    """Start the clone/snapshot job and return a job_id to poll."""
     job_id = uuid.uuid4().hex
     _JOBS[job_id] = {"status": "queued"}
     args = {
@@ -45,14 +54,12 @@ async def git_repo_snapshot_start(
         "depth": depth,
         "auth_mode": auth_mode,
     }
-    # fire-and-forget background task (do not block this request)
     asyncio.get_running_loop().create_task(_run_clone_job(job_id, args))
     return {"job_id": job_id, "status": "queued"}
 
 
 @mcp.tool(name="git.repo.snapshot.status", title="Check Snapshot Status")
 async def git_repo_snapshot_status(job_id: str) -> dict:
-    """Poll job status. When status=='done', returns the snapshot result."""
     job = _JOBS.get(job_id)
     if not job:
         return {"job_id": job_id, "status": "not_found"}
@@ -62,3 +69,11 @@ async def git_repo_snapshot_status(job_id: str) -> dict:
     if job["status"] == "error":
         out["error"] = job.get("error", "unknown error")
     return out
+
+
+try:
+    @mcp.on_startup  # type: ignore[attr-defined]
+    async def _on_start() -> None:
+        logger.info("FastMCP server started with tools: %s", [t.name for t in mcp.tools])
+except Exception:
+    pass
