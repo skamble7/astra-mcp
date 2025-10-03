@@ -4,11 +4,12 @@ services:
       context: ../servers/git-repo-snapshot
       dockerfile: Dockerfile
       args:
-        EXTRAS: "sse"                 # 👈 no square brackets
+        EXTRAS: "sse"
     image: astra/mcp-git-repo-snapshot:local
     container_name: mcp-git-repo-snapshot
     restart: unless-stopped
     environment:
+      MCP_TRANSPORT: streamable-http
       MCP_PORT: ${GIT_SNAPSHOT_PORT:-8000}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     ports:
@@ -24,6 +25,12 @@ services:
     container_name: mcp-cobol-parser
     restart: unless-stopped
     environment:
+      # MCP runner config
+      MCP_TRANSPORT: streamable-http
+      MCP_PORT: ${COBOL_PARSER_PORT:-8765}
+      MCP_MOUNT_PATH: /mcp
+
+      # service config
       PAGE_SIZE: 100
       MAX_PAGE_SIZE: 500
       WORKERS: 8

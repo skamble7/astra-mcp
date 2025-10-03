@@ -1,6 +1,6 @@
 # -----------------------------
 # mcp-cobol-parser / Dockerfile
-# Option A: libs on classpath (no maven shading)
+# Streamable HTTP via official MCP runner
 # -----------------------------
 FROM python:3.11-slim AS runtime
 
@@ -12,7 +12,7 @@ ENV PYTHONUNBUFFERED=1 \
     LC_ALL=C.UTF-8 \
     TZ=UTC
 
-# System deps (JDK needed to compile CLI)
+# System deps
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
@@ -33,9 +33,9 @@ COPY vendor-src/proleap/ ./vendor-src/proleap/
 # Prebuilt cb2xml jars (expected: cb2xml.jar, cb2xml_Jaxb.jar, cb2xml_definitions.jar)
 COPY vendor/cb2xml/ /app/vendor/cb2xml/
 
-# --- Install python deps
+# --- Install python deps (use MCP server extras)
 RUN pip install --upgrade pip && \
-    pip install --no-cache-dir "mcp>=1.0.0" && \
+    pip install --no-cache-dir "mcp[server]>=1.3.0,<2" && \
     pip install --no-cache-dir .
 
 # --- Non-root user
@@ -50,9 +50,9 @@ RUN set -eux; \
   cd /app/vendor/proleap/lib; \
   # ProLeap core
   curl -fsSL -O https://maven.scijava.org/content/repositories/public/io/github/uwol/proleap-cobol-parser/2.4.0/proleap-cobol-parser-2.4.0.jar; \
-  # ANTLR runtime (pin to 4.7 to avoid mismatch with generated code)
+  # ANTLR runtime (pin to 4.7)
   curl -fsSL -O https://repo1.maven.org/maven2/org/antlr/antlr4-runtime/4.7/antlr4-runtime-4.7.jar; \
-  # Other dependencies commonly required by ProLeap
+  # Common deps
   curl -fsSL -O https://repo1.maven.org/maven2/com/google/guava/guava/33.2.1-jre/guava-33.2.1-jre.jar; \
   curl -fsSL -O https://repo1.maven.org/maven2/commons-io/commons-io/2.15.1/commons-io-2.15.1.jar; \
   curl -fsSL -O https://repo1.maven.org/maven2/org/apache/commons/commons-lang3/3.14.0/commons-lang3-3.14.0.jar; \
@@ -60,7 +60,6 @@ RUN set -eux; \
   curl -fsSL -O https://repo1.maven.org/maven2/org/apache/logging/log4j/log4j-core/2.22.1/log4j-core-2.22.1.jar
 
 # --- Compile the tiny CLI launcher (renova) and richer JSON CLI (astra) and jar them up
-# NOTE: CLI.java is at vendor-src/proleap/CLI.java; JsonCli.java is in mcp_cobol_parser/java/
 RUN set -eux; \
   test -f /app/vendor-src/proleap/CLI.java; \
   test -f /app/mcp_cobol_parser/java/JsonCli.java; \
@@ -71,7 +70,7 @@ RUN set -eux; \
         /app/mcp_cobol_parser/java/JsonCli.java; \
   jar --create --file /app/vendor/proleap/proleap-bridge.jar -C /app/vendor/proleap/build .
 
-# --- Defaults
+# --- Defaults (now driven by the MCP runner)
 ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 \
     PAGE_SIZE=100 \
     MAX_PAGE_SIZE=500 \
@@ -80,32 +79,29 @@ ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 \
     LOG_LEVEL=INFO \
     \
     # === CB2XML configuration ===
-    # Point directly at the main cb2xml jar (error previously showed JAR=None).
     CB2XML_JAR=/app/vendor/cb2xml/cb2xml.jar \
-    # Full classpath for cb2xml including its deps.
     CB2XML_CP=/app/vendor/cb2xml/cb2xml.jar:/app/vendor/cb2xml/cb2xml_Jaxb.jar:/app/vendor/cb2xml/cb2xml_definitions.jar \
-    # Main class used by the server to invoke cb2xml.
     CB2XML_MAIN=net.sf.cb2xml.Cb2Xml \
     \
     # ProLeap: use our freshly built bridge + libs
     PROLEAP_JAR=/app/vendor/proleap/proleap-bridge.jar \
     PROLEAP_CP=/app/vendor/proleap/lib/* \
-    # Default to the richer JSON bridge
     PROLEAP_MAIN=com.astra.proleap.JsonCli \
     \
-    # Keep strict so we never silently fall back
     STRICT_PROLEAP=true \
-    STRICT_CB2XML=true
-
-# --- Verify expected jars exist (fail fast at build time)
-RUN set -eux; \
-  test -f "$CB2XML_JAR"; \
-  for f in $(echo "$CB2XML_CP" | tr ':' ' '); do test -f "$f"; done; \
-  test -f "$PROLEAP_JAR"
+    STRICT_CB2XML=true \
+    \
+    # === MCP runner defaults (streamable HTTP) ===
+    MCP_TRANSPORT=streamable-http \
+    MCP_HOST=0.0.0.0 \
+    MCP_PORT=8765 \
+    MCP_MOUNT_PATH=/mcp
 
 EXPOSE 8765
+
+# streamable-http doesn't expose a GET /health; keep a simple TCP check
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
   CMD bash -lc 'exec 3<>/dev/tcp/127.0.0.1/8765 && exec 3>&- || exit 1'
 
 ENTRYPOINT ["/usr/bin/tini","-g","--"]
-CMD ["python","-m","mcp_cobol_parser.server"]
+CMD ["python","-m","mcp_cobol_parser"]
