@@ -40,3 +40,22 @@ services:
       - "${COBOL_PARSER_PORT:-8765}:8765"
     volumes:
       - ${WORKSPACE_HOST_DIR:-../data/workspace}:/workspace
+
+  mcp-mermaid-diagrammer:
+    build:
+      context: ../servers/mcp-mermaid-diagrammer
+      dockerfile: Dockerfile
+    image: astra/mcp-mermaid-diagrammer:local
+    container_name: mcp-mermaid-diagrammer
+    restart: unless-stopped
+    environment:
+      MCP_TRANSPORT: streamable-http
+      MCP_PORT: ${MERMAID_DIAGRAMMER_PORT:-8001}
+      MCP_MOUNT_PATH: /mcp
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      ENABLE_REAL_LLM: "true"
+      LLM_PROVIDER: OpenAI
+      LLM_MODEL: gpt-4o-mini
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-"sk-REPLACE_ME"}
+    ports:
+      - "${MERMAID_DIAGRAMMER_PORT:-8001}:8001"
