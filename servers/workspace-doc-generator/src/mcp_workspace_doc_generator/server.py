@@ -17,23 +17,21 @@ log = logging.getLogger(os.getenv("SERVICE_NAME", "mcp.workspace.doc.generator")
 
 mcp = FastMCP("workspace-doc-generator")
 
-# In-memory job store (simple; swap to Redis if you need persistence)
 _JOBS: dict[str, dict[str, Any]] = {}
 
 async def _run_doc_job(job_id: str, args: dict[str, Any]) -> None:
     job = _JOBS[job_id]
     job["status"] = "running"
     job["progress"] = 10.0
-    job["message"] = "Fetching artifacts…"
+    job["message"] = "Generating document…"
     try:
         params = GenerateParams(**args)
-        # Run the whole doc generation off the event loop if you add blocking bits later
         result = await generate_workspace_document(params)
         job["status"] = "done"
         job["progress"] = 100.0
         job["message"] = "Document generated."
-        job["result"] = result                # full cam.asset.file_detail
-        job["artifacts"] = [result]           # generic harvesters expect an artifacts array
+        job["result"] = result
+        job["artifacts"] = [result]
     except Exception as e:
         log.exception("job.failed", extra={"job_id": job_id})
         job["status"] = "error"
@@ -41,18 +39,26 @@ async def _run_doc_job(job_id: str, args: dict[str, Any]) -> None:
         job["error"] = f"{e.__class__.__name__}: {e}"
 
 @mcp.tool(name="workspace.document.start", title="Start Workspace Document Generation")
-async def workspace_document_start(workspace_id: str, prompt: str) -> dict:
-    """Start async doc generation; returns job_id immediately."""
+async def workspace_document_start(workspace_id: str, kind_id: str) -> dict:
+    """
+    Starts a background job that:
+      - fetches the registry kind declaration (prompt + dependencies + schema),
+      - fetches workspace artifacts,
+      - shortlists by depends_on,
+      - generates a descriptive Markdown doc using the kind's prompt.system,
+      - returns an object shaped to the kind's json_schema.
+    """
     job_id = uuid.uuid4().hex
     _JOBS[job_id] = {
         "status": "queued",
         "progress": 0.0,
         "message": "Queued",
         "workspace_id": workspace_id,
+        "kind_id": kind_id,
     }
-    args = {"workspace_id": workspace_id, "prompt": prompt}
+    args = {"workspace_id": workspace_id, "kind_id": kind_id}
     asyncio.get_running_loop().create_task(_run_doc_job(job_id, args))
-    log.info("job.start", extra={"job_id": job_id, "workspace_id": workspace_id})
+    log.info("job.start", extra={"job_id": job_id, "workspace_id": workspace_id, "kind_id": kind_id})
     return {"job_id": job_id, "status": "queued", "progress": 0.0, "message": "Queued"}
 
 @mcp.tool(name="workspace.document.status", title="Check Workspace Document Job")
@@ -60,7 +66,6 @@ async def workspace_document_status(job_id: str) -> dict:
     job = _JOBS.get(job_id)
     if not job:
         return {"job_id": job_id, "status": "error", "error": "Unknown job_id", "message": "Job not found."}
-
     out: dict[str, Any] = {
         "job_id": job_id,
         "status": job.get("status"),
@@ -68,18 +73,16 @@ async def workspace_document_status(job_id: str) -> dict:
         "message": job.get("message"),
     }
     if job.get("status") == "done":
-        # expose both (result and artifacts)
         out["result"] = job.get("result")
         out["artifacts"] = job.get("artifacts")
     if job.get("status") == "error":
         out["error"] = job.get("error")
     return out
 
-# (Optional) keep the direct tool for simple callers; it can still time out if LLM is slow.
 @mcp.tool(name="generate.workspace.document", title="Generate Workspace Document (blocking)")
-async def tool_generate_workspace_document(workspace_id: str, prompt: str) -> Dict[str, Any]:
-    log.info("tool.call", extra={"tool": "generate.workspace.document", "workspace_id": workspace_id})
-    params = GenerateParams(workspace_id=workspace_id, prompt=prompt)
+async def tool_generate_workspace_document(workspace_id: str, kind_id: str) -> Dict[str, Any]:
+    log.info("tool.call", extra={"tool": "generate.workspace.document", "workspace_id": workspace_id, "kind_id": kind_id})
+    params = GenerateParams(workspace_id=workspace_id, kind_id=kind_id)
     return await generate_workspace_document(params)
 
 try:
