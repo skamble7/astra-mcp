@@ -1,0 +1,119 @@
+{
+  "_id": "cam.asset.file_detail",
+  "title": "File Detail",
+  "category": "generic",
+  "aliases": [],
+  "status": "active",
+  "latest_schema_version": "1.0.0",
+  "schema_versions": [
+    {
+      "version": "1.0.0",
+      "json_schema": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["name"],
+        "properties": {
+          "name": { "type": ["string","null"], "description": "Human-friendly file name (may differ from filename)." },
+          "description": { "type": ["string","null"], "description": "Optional description of the file contents/purpose." },
+          "filename": { "type": ["string","null"], "description": "Actual filename including extension." },
+          "path": { "type": ["string","null"], "description": "Logical or repository path (if applicable)." },
+          "storage_uri": { "type": ["string","null"], "description": "Canonical storage URI (e.g., s3://bucket/key, gs://..., file:///...)." },
+          "download_url": { "type": ["string","null"], "format": "uri", "description": "Direct link to download the file." },
+          "download_expires_at": { "type": ["string","null"], "format": "date-time", "description": "If the download link is pre-signed/temporary, its expiry." },
+          "size_bytes": { "type": ["integer","string","null"], "description": "Size of the file in bytes." },
+          "mime_type": { "type": ["string","null"], "description": "IANA media type (e.g., application/pdf)." },
+          "encoding": { "type": ["string","null"], "description": "Text/binary encoding if relevant (e.g., utf-8, gzip)." },
+          "checksum": {
+            "type": ["object","null"],
+            "additionalProperties": true,
+            "required": [],
+            "properties": {
+              "md5": { "type": ["string","null"] },
+              "sha1": { "type": ["string","null"] },
+              "sha256": { "type": ["string","null"] }
+            }
+          },
+          "revision": { "type": ["string","null"], "description": "File revision/version identifier (e.g., git SHA, object version)." },
+          "source_system": { "type": ["string","null"], "description": "Originating system or repository." },
+          "owner": { "type": ["string","null"], "description": "Owner or steward of the file." },
+          "tags": { "type": ["array","null"], "items": { "type": "string" }, "description": "Free-form tags." },
+          "created_at": { "type": ["string","null"], "format": "date-time" },
+          "updated_at": { "type": ["string","null"], "format": "date-time" },
+          "access_policy": { "type": ["string","object","null"], "description": "Policy label or inline ACL summary for the file." },
+          "metadata": { "type": ["object","null"], "additionalProperties": true, "description": "Arbitrary extra metadata (key/value)." },
+          "preview": {
+            "type": ["object","null"],
+            "additionalProperties": true,
+            "properties": {
+              "thumbnail_url": { "type": ["string","null"], "format": "uri" },
+              "text_excerpt": { "type": ["string","null"] },
+              "page_count": { "type": ["integer","string","null"] }
+            },
+            "description": "Optional preview hints for UIs."
+          },
+          "related_assets": {
+            "type": ["array","null"],
+            "items": {
+              "type": "object",
+              "additionalProperties": true,
+              "required": ["id"],
+              "properties": {
+                "id": { "type": ["string","null"], "description": "CAM ID of a related asset/kind." },
+                "relation": { "type": ["string","null"], "description": "Relation (e.g., derived-from, source-of)." }
+              }
+            }
+          }
+        }
+      },
+      "additional_props_policy": "allow",
+      "prompt": {
+        "system": "Produce accurate file metadata. If a secure, time-limited link is available, set download_url and download_expires_at. Do not invent checksums or sizes.",
+        "strict_json": true
+      },
+      "depends_on": { "hard": [], "soft": [] },
+      "identity": { "natural_key": ["storage_uri","revision","checksum.sha256"] },
+      "examples": [
+        {
+          "name": "Monthly Transactions Export (July 2025)",
+          "description": "CSV export for finance reconciliation.",
+          "filename": "txns_2025_07.csv",
+          "path": "exports/finance/2025/07/txns_2025_07.csv",
+          "storage_uri": "s3://acme-data/exports/finance/2025/07/txns_2025_07.csv",
+          "download_url": "https://signed.example.com/download/txns_2025_07.csv?sig=abc123",
+          "download_expires_at": "2025-08-01T00:00:00Z",
+          "size_bytes": 18432291,
+          "mime_type": "text/csv",
+          "encoding": "utf-8",
+          "checksum": { "sha256": "2dfc0f2b7f3f4b7a8b9d9e2a5c1a9c3d7e4f5a6b8c9d0e1f2a3b4c5d6e7f809a" },
+          "revision": "6b9c1e2",
+          "source_system": "Data Lake (Finance Workspace)",
+          "owner": "finance-data@acme.com",
+          "tags": ["finance","export","csv","monthly"],
+          "created_at": "2025-07-31T23:40:02Z",
+          "updated_at": "2025-07-31T23:41:55Z",
+          "access_policy": "internal-confidential",
+          "metadata": { "row_count": 128934, "columns": 24 },
+          "preview": { "thumbnail_url": null, "text_excerpt": "txn_id,posted_at,amount,currency,...", "page_count": null },
+          "related_assets": [{ "id": "cam.catalog.data_products:finance-monthly-txns", "relation": "published-as" }]
+        }
+      ],
+      "diagram_recipes": [
+        {
+          "id": "file.card",
+          "title": "File Card",
+          "view": "flowchart",
+          "language": "mermaid",
+          "description": "Compact card with name, size, type.",
+          "template": "flowchart TB\n  A[\"{{ (data.name or data.filename) | replace('\\\"', \"'\") }}\\n{{ (data.mime_type or 'unknown') }}\\n{{ (data.size_bytes or 'n/a') }} bytes\"]",
+          "renderer_hints": { "direction": "TB" }
+        }
+      ],
+      "narratives_spec": {
+        "allowed_formats": ["markdown","asciidoc"],
+        "default_format": "markdown",
+        "max_length_chars": 10000,
+        "allowed_locales": ["en-US"]
+      }
+    }
+  ]
+}

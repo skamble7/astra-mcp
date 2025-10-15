@@ -1,0 +1,6 @@
+
+service:
+  name: mcp.workspace.doc.generator
+logging:
+  level: INFO
+output_dir: ${OUTPUT_DIR:-/tmp/mcp-workspace-docs}

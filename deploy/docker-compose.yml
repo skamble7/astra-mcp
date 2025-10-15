@@ -53,9 +53,51 @@ services:
       MCP_PORT: ${MERMAID_DIAGRAMMER_PORT:-8001}
       MCP_MOUNT_PATH: /mcp
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      ENABLE_REAL_LLM: "true"
+      ENABLE_REAL_LLM: "false"
       LLM_PROVIDER: OpenAI
       LLM_MODEL: gpt-4o-mini
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-"sk-REPLACE_ME"}
+      OPENAI_API_KEY: <OPENAI_API_KEY>
     ports:
       - "${MERMAID_DIAGRAMMER_PORT:-8001}:8001"
+  
+  mcp-workspace-doc-generator:
+    build:
+      context: ../servers/workspace-doc-generator
+      dockerfile: Dockerfile
+    image: astra/mcp-workspace-doc-generator:local
+    container_name: mcp-workspace-doc-generator
+    restart: unless-stopped
+    environment:
+      # --- MCP Transport ---
+      MCP_TRANSPORT: streamable-http
+      MCP_PORT: ${WORKSPACE_DOC_PORT:-8002}
+      MCP_MOUNT_PATH: /mcp
+
+      # --- Logging ---
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      SERVICE_NAME: mcp.workspace.doc.generator
+
+      # --- LLM (OpenAI) ---
+      ENABLE_REAL_LLM: "true"     # set "false" for offline mode
+      LLM_PROVIDER: OpenAI
+      LLM_MODEL: gpt-4o-mini
+      LLM_TEMPERATURE: "0.2"
+      LLM_MAX_TOKENS: "10000"
+      OPENAI_API_KEY: <OPENAI_API_KEY>
+
+      # --- Services ---
+      # Artifact service is in a separate compose; talk to the host-published port
+      ARTIFACT_SERVICE_URL: http://host.docker.internal:9020
+
+      # --- Output directory inside the container ---
+      OUTPUT_DIR: /out
+    ports:
+      - "${WORKSPACE_DOC_PORT:-8002}:8002"
+    volumes:
+      # Persist generated workspace markdown summaries
+      - ./data/output/workspace-docs:/out
+      # Optional local-fallback context (if you ever drop artifacts.json for a workspace)
+      - ${WORKSPACE_HOST_DIR:-../data/workspace}:/workspace
+    extra_hosts:
+      # <-- this line makes 'host.docker.internal' resolvable in this container
+      - "host.docker.internal:host-gateway"

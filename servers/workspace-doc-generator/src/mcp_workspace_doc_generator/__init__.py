@@ -1,0 +1,1 @@
+# servers/workspace-doc-generator/src/mcp_workspace_doc_generator/__init__.py
