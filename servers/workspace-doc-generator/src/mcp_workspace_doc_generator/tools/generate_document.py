@@ -1,11 +1,12 @@
 # servers/workspace-doc-generator/src/mcp_workspace_doc_generator/tools/generate_document.py
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import json
 import logging
 import os
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List
 
 from ..models.params import GenerateParams
 from ..utils.artifacts_fetch import (
@@ -16,6 +17,11 @@ from ..utils.artifacts_fetch import (
 from ..utils.io_paths import ensure_output_dir
 from ..utils.checksums import sha256_of_file
 from ..settings import Settings
+from ..utils.storage import (
+    upload_file_to_s3,
+    build_public_download_url,
+    generate_presigned_get_url,
+)
 
 log = logging.getLogger("mcp.workspace.doc.generate")
 MIME = "text/markdown"
@@ -59,7 +65,7 @@ def _json_size_bytes(obj: Any) -> int:
     except Exception:
         return 0
 
-# ----------------------- diagrams -----------------------
+# ----------------------- diagrams & renderers ----------------
 def _render_diagrams(diagrams: Any) -> str:
     if not isinstance(diagrams, list) or not diagrams:
         return ""
@@ -85,7 +91,6 @@ def _render_diagrams(diagrams: Any) -> str:
     lines.append("")
     return "\n".join(lines)
 
-# ---------------- descriptive renderers (generic) ----------------
 def _summarize_scalar_props(data: Dict[str, Any]) -> str:
     scalars = {k: v for k, v in data.items() if _is_scalar(v)}
     if not scalars:
@@ -217,7 +222,6 @@ def _render_markdown_structured(
         f"It summarizes **{total}** related artifact(s) selected via the kind’s dependency rules.\n"
     )
 
-    # group by kind
     buckets: Dict[str, List[Dict[str, Any]]] = {}
     display: Dict[str, str] = {}
     for a in selected:
@@ -234,9 +238,8 @@ def _render_markdown_structured(
 
     return "\n".join(lines).strip() + "\n"
 
-# ------------------------ LLM CHUNKING SUPPORT ------------------------
+# ------------------------ LLM chunking ------------------------
 def _artifact_record_for_llm(a: Dict[str, Any]) -> Dict[str, Any]:
-    """Pass full data + diagrams so the model can write accurate summaries and include Mermaid blocks."""
     return {
         "artifact_id": a.get("artifact_id"),
         "kind": a.get("kind"),
@@ -250,17 +253,12 @@ def _chunk_artifacts_for_llm(
     target_bytes: int,
     hard_cap_items: int,
 ) -> List[List[Dict[str, Any]]]:
-    """
-    Greedy chunker: groups artifact records so that the JSON size of each chunk is <= target_bytes
-    and item count per chunk <= hard_cap_items.
-    """
     chunks: List[List[Dict[str, Any]]] = []
     current: List[Dict[str, Any]] = []
     current_size = 2  # for surrounding []
     for art in artifacts:
         record = _artifact_record_for_llm(art)
         rec_size = _json_size_bytes(record) + 1  # comma
-        # Start a new chunk if adding this overflows byte budget or item cap
         if current and (current_size + rec_size > target_bytes or len(current) >= hard_cap_items):
             chunks.append(current)
             current = []
@@ -278,29 +276,22 @@ async def _llm_generate_with_kind_prompt(
     work_meta: Dict[str, Any],
     settings: Settings,
 ) -> str:
-    """
-    Uses the kind's 'prompt.system' as the system message to generate descriptive Markdown.
-    Sends full artifact 'data' and 'diagrams' to the LLM. If the payload is large, we split into
-    chunks and call the model per-chunk, concatenating the results.
-    """
-    from openai import AsyncOpenAI
+    import asyncio as _asyncio
+    from openai import AsyncOpenAI, APIError, APITimeoutError, RateLimitError
+    import httpx
 
     api_key = (os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_APIKEY") or "").strip()
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY is not set")
 
-    # Chunking parameters (tunable via env)
-    # Budget is approximate since we use JSON byte size; defaults are conservative.
-    target_bytes = int(os.getenv("LLM_CHUNK_TARGET_BYTES", "110000"))  # ~110 KB JSON per chunk
-    hard_cap_items = int(os.getenv("LLM_CHUNK_MAX_ITEMS", "12"))       # at most 12 artifacts per chunk
+    target_bytes = int(os.getenv("LLM_CHUNK_TARGET_BYTES", "90000"))
+    hard_cap_items = int(os.getenv("LLM_CHUNK_MAX_ITEMS", "10"))
 
-    # Prepare chunks
     chunks = _chunk_artifacts_for_llm(selected_artifacts, target_bytes, hard_cap_items)
     total_parts = len(chunks) or 1
 
-    client = AsyncOpenAI(api_key=api_key, timeout=120.0)
+    client = AsyncOpenAI(api_key=api_key, timeout=settings.llm_request_timeout)
 
-    # Token limit handling
     max_tokens_env = (os.getenv("LLM_MAX_TOKENS") or "").strip().lower()
     set_max_tokens = None
     if max_tokens_env not in {"", "0", "-1", "none", "null"}:
@@ -309,7 +300,6 @@ async def _llm_generate_with_kind_prompt(
         except Exception:
             set_max_tokens = settings.max_tokens
 
-    # Compose common instructions
     user_preamble = (
         "Create a descriptive **Markdown** document summarizing the COBOL-specific artifacts in this workspace. "
         "For each artifact:\n"
@@ -321,6 +311,26 @@ async def _llm_generate_with_kind_prompt(
         "You will receive the artifacts in one or more parts. Summarize only the artifacts present in the current part."
     )
 
+    async def _call_with_retries(req: Dict[str, Any], *, part_idx: int, json_bytes: int) -> str:
+        backoff = 0.8
+        last_err: Exception | None = None
+        for attempt in range(1, 1 + 4):
+            try:
+                resp = await client.chat.completions.create(**req)
+                return (resp.choices[0].message.content or "").strip()
+            except (APITimeoutError, httpx.ReadTimeout, httpx.ConnectTimeout) as e:
+                last_err = e
+                log.warning(f"llm.timeout part={part_idx} attempt={attempt} json_bytes={json_bytes}")
+            except (RateLimitError,) as e:
+                last_err = e
+                log.warning(f"llm.rate_limited part={part_idx} attempt={attempt}")
+            except (APIError, httpx.HTTPError) as e:
+                last_err = e
+                log.warning(f"llm.api_error part={part_idx} attempt={attempt} detail={e}")
+            await _asyncio.sleep(backoff)
+            backoff = min(backoff * 2.0, 10.0)
+        raise last_err if last_err else RuntimeError("LLM call failed with unknown error")
+
     outputs: List[str] = []
     for idx, chunk in enumerate(chunks, start=1):
         context = {
@@ -329,12 +339,7 @@ async def _llm_generate_with_kind_prompt(
         }
         messages = [
             {"role": "system", "content": system_prompt},
-            {
-                "role": "user",
-                "content": user_preamble
-                + "\n\nJSON Context:\n"
-                + json.dumps(context, ensure_ascii=False),
-            },
+            {"role": "user", "content": user_preamble + "\n\nJSON Context:\n" + json.dumps(context, ensure_ascii=False)},
         ]
         req: Dict[str, Any] = {
             "model": settings.llm_model,
@@ -344,21 +349,16 @@ async def _llm_generate_with_kind_prompt(
         if set_max_tokens is not None and set_max_tokens > 0:
             req["max_tokens"] = set_max_tokens
 
-        log.info(
-            "llm.call.begin",
-            extra={
-                "model": settings.llm_model,
-                "part": idx,
-                "of": total_parts,
-                "artifacts_in_chunk": len(chunk),
-                "json_bytes": _json_size_bytes(context),
-            },
-        )
-        resp = await client.chat.completions.create(**req)
-        text = (resp.choices[0].message.content or "").strip()
-        log.info("llm.call.success", extra={"output_len": len(text), "part": idx, "of": total_parts})
+        json_bytes = _json_size_bytes(context)
+        log.info(f"llm.call.begin model={settings.llm_model} part={idx}/{total_parts} artifacts_in_chunk={len(chunk)} json_bytes={json_bytes} timeout_sec={settings.llm_request_timeout}")
+        try:
+            text = await _call_with_retries(req, part_idx=idx, json_bytes=json_bytes)
+            log.info(f"llm.call.success part={idx}/{total_parts} output_len={len(text)}")
+        except Exception as e:
+            log.error(f"llm.call.failed_after_retries part={idx}/{total_parts} error={e.__class__.__name__}: {e}")
+            text = f"\n> _Note: generation for part {idx}/{total_parts} failed after retries ({e.__class__.__name__}). Skipping this part._\n"
+
         if text:
-            # Add a small separator to avoid header collisions across parts
             if idx > 1 and not text.startswith("\n"):
                 outputs.append("\n")
             outputs.append(text)
@@ -368,52 +368,53 @@ async def _llm_generate_with_kind_prompt(
 # ------------------------------- main -------------------------------
 async def generate_workspace_document(params: GenerateParams) -> Dict[str, Any]:
     settings = Settings.from_env()
+
+    # Print a clear S3 snapshot that survives basic formatters
+    s3_snapshot = {
+        "enabled": settings.s3_enabled,
+        "endpoint": settings.s3_endpoint_url,
+        "bucket": settings.s3_bucket,
+        "prefix": settings.s3_prefix,
+        "public_base": settings.s3_public_base_url,
+        "public_read": settings.s3_public_read,
+        "force_signed": settings.s3_force_signed,
+        "presign_ttl": settings.s3_presign_ttl_seconds,
+        "presign_base": settings.s3_presign_base_url,
+    }
     log.info(
-        "gen.begin",
-        extra={
-            "workspace_id": params.workspace_id,
-            "kind_id": params.kind_id,
-            "llm_enabled": settings.enable_real_llm,
-            "llm_provider": settings.llm_provider,
-            "llm_model": settings.llm_model,
-            "artifact_service_url": settings.artifact_service_url,
-        },
+        "gen.begin "
+        f"workspace_id={params.workspace_id} kind_id={params.kind_id} "
+        f"llm_enabled={settings.enable_real_llm} llm_model={settings.llm_model} "
+        f"artifact_service_url={settings.artifact_service_url} "
+        f"s3={json.dumps(s3_snapshot, ensure_ascii=False)}"
     )
 
-    # 1) Resolve workspace artifacts (actual instances)
+    # 1) Resolve workspace artifacts
     all_arts = await fetch_workspace_artifacts(params.workspace_id)
-    log.info("gen.fetch.done", extra={"artifact_count": len(all_arts)})
+    log.info(f"gen.fetch.done artifact_count={len(all_arts)}")
 
-    # 2) Resolve kind declaration (template)
+    # 2) Resolve kind declaration
     kind_def = await fetch_kind_definition(params.kind_id)
     if not kind_def:
         raise RuntimeError(f"Kind not found: {params.kind_id}")
 
-    # 3) Pick latest schema version block
+    # 3) Latest schema version
     versions = kind_def.get("schema_versions") or []
     latest_ver = kind_def.get("latest_schema_version")
-    latest = None
-    for v in versions:
-        if v.get("version") == latest_ver:
-            latest = v
-            break
-    if latest is None and versions:
-        latest = versions[0]
+    latest = next((v for v in versions if v.get("version") == latest_ver), versions[0] if versions else None)
     if latest is None:
         raise RuntimeError(f"No schema_versions available for kind: {params.kind_id}")
 
-    # 4) Dependency shortlist
+    # 4) Shortlist
     depends_on = latest.get("depends_on") or {}
     hard_kinds = depends_on.get("hard") or []
     soft_kinds = depends_on.get("soft") or []
     selected = shortlist_by_kinds(all_arts, hard_kinds, soft_kinds)
 
-    # 5) Generate Markdown
+    # 5) Generate Markdown (deterministic, maybe replaced by LLM)
     driver_title = kind_def.get("title") or params.kind_id
     driver_kind = params.kind_id
-    deterministic_md = _render_markdown_structured(
-        params.workspace_id, driver_title, driver_kind, selected
-    )
+    deterministic_md = _render_markdown_structured(params.workspace_id, driver_title, driver_kind, selected)
 
     final_md = deterministic_md
     system_prompt = (latest.get("prompt") or {}).get("system") or ""
@@ -425,34 +426,82 @@ async def generate_workspace_document(params: GenerateParams) -> Dict[str, Any]:
                 work_meta={"workspace_id": params.workspace_id, "selected_count": len(selected)},
                 settings=settings,
             )
-            # Prefer LLM content if it exists; otherwise keep deterministic
             if llm_md:
                 final_md = llm_md
         except Exception:
             log.exception("llm.generation.failed")
 
-    # 6) (Optional) enforce narratives_spec limits
+    # 6) Optional length limit
     narratives = latest.get("narratives_spec") or {}
     max_chars = narratives.get("max_length_chars")
     if isinstance(max_chars, int) and max_chars > 0 and len(final_md) > max_chars:
         final_md = final_md[:max_chars]
 
-    # 7) Write file (we still materialize a Markdown file for convenience)
+    # 7) Write file locally
     out_dir = ensure_output_dir()
     filename = f"workspace_{params.workspace_id}_{driver_kind}_summary.md"
     path = out_dir / filename
     path.write_text(final_md, encoding="utf-8")
     sha = sha256_of_file(path)
     size = path.stat().st_size
-    log.info("gen.write.ok", extra={"path": str(path), "size_bytes": len(final_md.encode('utf-8'))})
+    log.info(f"gen.write.ok path={path} size_bytes={len(final_md.encode('utf-8'))}")
 
-    # 8) Return value MUST conform to the kind's schema (usually permissive).
+    # 7b) Upload to Garage (S3) if configured
+    storage_uri = f"file://{path}"
+    download_url: str | None = None
+    if settings.s3_enabled and settings.s3_bucket:
+        key = f"{(settings.s3_prefix or 'workspace-docs').strip('/')}/{params.workspace_id}/{filename}"
+        log.info(f"s3.plan bucket={settings.s3_bucket} key={key}")
+        ok = upload_file_to_s3(
+            settings=settings,
+            local_path=path,
+            bucket=settings.s3_bucket,
+            key=key,
+            content_type=MIME,
+        )
+        if ok:
+            storage_uri = f"s3://{settings.s3_bucket}/{key}"
+
+            # Choose link strategy: presign if forced OR no public base configured
+            dl: str | None = None
+            if settings.s3_force_signed or not settings.s3_public_base_url:
+                dl = generate_presigned_get_url(
+                    settings,
+                    settings.s3_bucket,
+                    key,
+                    settings.s3_presign_ttl_seconds,
+                )
+                if dl:
+                    log.info("s3.download_url.signed", extra={"ttl_sec": settings.s3_presign_ttl_seconds})
+            else:
+                dl = build_public_download_url(settings, settings.s3_bucket, key)
+                if dl:
+                    log.info(f"s3.download_url url={dl}")
+
+            if dl:
+                download_url = dl
+            else:
+                log.info("s3.download_url.unset", extra={"reason": "no public base and presign failed"})
+    else:
+        missing = []
+        if not (settings.s3_endpoint_url or "").strip():
+            missing.append("S3_ENDPOINT_URL")
+        if not (settings.s3_access_key or "").strip():
+            missing.append("S3_ACCESS_KEY")
+        if not (settings.s3_secret_key or "").strip():
+            missing.append("S3_SECRET_KEY")
+        if not (settings.s3_bucket or "").strip():
+            missing.append("S3_BUCKET")
+        log.info(f"s3.skip_upload upload_skipped missing={','.join(missing) if missing else 'unknown'} s3_enabled={settings.s3_enabled}")
+
+    # 8) Return artifact
     result: Dict[str, Any] = {
         "name": f"{driver_title} (Workspace {params.workspace_id})",
         "description": f"Generated descriptive document for {driver_kind}; based on depends_on hard/soft kinds over workspace artifacts.",
         "filename": filename,
         "path": str(path),
-        "storage_uri": f"file://{path}",
+        "storage_uri": storage_uri,
+        "download_url": download_url,
         "size_bytes": size,
         "mime_type": MIME,
         "encoding": "utf-8",
@@ -467,8 +516,11 @@ async def generate_workspace_document(params: GenerateParams) -> Dict[str, Any]:
             "kind_id": params.kind_id,
             "selected_count": len(selected),
             "llm": settings.llm_model if settings.enable_real_llm and system_prompt.strip() else "disabled",
+            "s3_bucket": settings.s3_bucket,
+            "s3_key_prefix": settings.s3_prefix,
+            "s3_endpoint": settings.s3_endpoint_url,
         },
     }
 
-    log.info("gen.success", extra={"workspace_id": params.workspace_id, "driver_kind": driver_kind})
+    log.info(f"gen.success workspace_id={params.workspace_id} driver_kind={driver_kind} uploaded={bool(download_url)} download_url={download_url}")
     return result

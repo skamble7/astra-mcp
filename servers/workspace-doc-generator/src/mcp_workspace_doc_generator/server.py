@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import json
 import uuid
 from typing import Any, Dict
 
@@ -19,6 +20,20 @@ mcp = FastMCP("workspace-doc-generator")
 
 _JOBS: dict[str, dict[str, Any]] = {}
 
+def _safe_cfg_snapshot(s: Settings) -> dict[str, Any]:
+    return {
+        "transport": os.getenv("MCP_TRANSPORT", "streamable-http"),
+        "llm_enabled": s.enable_real_llm,
+        "llm_provider": s.llm_provider,
+        "llm_model": s.llm_model,
+        "artifact_service_url": s.artifact_service_url,
+        "s3_enabled": s.s3_enabled,
+        "s3_endpoint_url": s.s3_endpoint_url,
+        "s3_bucket": s.s3_bucket,
+        "s3_prefix": s.s3_prefix,
+        "s3_public_base_url": s.s3_public_base_url,
+    }
+
 async def _run_doc_job(job_id: str, args: dict[str, Any]) -> None:
     job = _JOBS[job_id]
     job["status"] = "running"
@@ -33,21 +48,13 @@ async def _run_doc_job(job_id: str, args: dict[str, Any]) -> None:
         job["result"] = result
         job["artifacts"] = [result]
     except Exception as e:
-        log.exception("job.failed", extra={"job_id": job_id})
+        log.exception(f"job.failed job_id={job_id}")
         job["status"] = "error"
         job["message"] = "Generation failed."
         job["error"] = f"{e.__class__.__name__}: {e}"
 
 @mcp.tool(name="workspace.document.start", title="Start Workspace Document Generation")
 async def workspace_document_start(workspace_id: str, kind_id: str) -> dict:
-    """
-    Starts a background job that:
-      - fetches the registry kind declaration (prompt + dependencies + schema),
-      - fetches workspace artifacts,
-      - shortlists by depends_on,
-      - generates a descriptive Markdown doc using the kind's prompt.system,
-      - returns an object shaped to the kind's json_schema.
-    """
     job_id = uuid.uuid4().hex
     _JOBS[job_id] = {
         "status": "queued",
@@ -58,7 +65,7 @@ async def workspace_document_start(workspace_id: str, kind_id: str) -> dict:
     }
     args = {"workspace_id": workspace_id, "kind_id": kind_id}
     asyncio.get_running_loop().create_task(_run_doc_job(job_id, args))
-    log.info("job.start", extra={"job_id": job_id, "workspace_id": workspace_id, "kind_id": kind_id})
+    log.info(f"job.start job_id={job_id} workspace_id={workspace_id} kind_id={kind_id}")
     return {"job_id": job_id, "status": "queued", "progress": 0.0, "message": "Queued"}
 
 @mcp.tool(name="workspace.document.status", title="Check Workspace Document Job")
@@ -81,7 +88,7 @@ async def workspace_document_status(job_id: str) -> dict:
 
 @mcp.tool(name="generate.workspace.document", title="Generate Workspace Document (blocking)")
 async def tool_generate_workspace_document(workspace_id: str, kind_id: str) -> Dict[str, Any]:
-    log.info("tool.call", extra={"tool": "generate.workspace.document", "workspace_id": workspace_id, "kind_id": kind_id})
+    log.info(f"tool.call name=generate.workspace.document workspace_id={workspace_id} kind_id={kind_id}")
     params = GenerateParams(workspace_id=workspace_id, kind_id=kind_id)
     return await generate_workspace_document(params)
 
@@ -89,15 +96,7 @@ try:
     @mcp.on_startup  # type: ignore[attr-defined]
     async def _on_start() -> None:
         s = Settings.from_env()
-        log.info(
-            "Workspace Doc Generator started",
-            extra={
-                "transport": os.getenv("MCP_TRANSPORT", "streamable-http"),
-                "llm_enabled": s.enable_real_llm,
-                "llm_provider": s.llm_provider,
-                "llm_model": s.llm_model,
-                "artifact_service_url": s.artifact_service_url,
-            },
-        )
+        snap = json.dumps(_safe_cfg_snapshot(s), ensure_ascii=False)
+        log.info(f"Workspace Doc Generator started cfg={snap}")
 except Exception:
     pass

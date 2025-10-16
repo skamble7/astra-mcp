@@ -67,6 +67,8 @@ services:
     image: astra/mcp-workspace-doc-generator:local
     container_name: mcp-workspace-doc-generator
     restart: unless-stopped
+    depends_on:
+      - garage
     environment:
       # --- MCP Transport ---
       MCP_TRANSPORT: streamable-http
@@ -91,6 +93,25 @@ services:
 
       # --- Output directory inside the container ---
       OUTPUT_DIR: /out
+
+      # --- Garage / S3 ---
+      # Use the internal service name so it resolves inside the compose network.
+      S3_ENDPOINT_URL: http://garage:3900
+      S3_REGION: garage
+      S3_ACCESS_KEY: GK9811538bf0c4e746d0f0acd4
+      S3_SECRET_KEY: 0d5e17cb76bc132c05afdea4870db8ee44116c88e84b776ec419dc195ae1042e
+      S3_BUCKET: astra-docs
+      S3_PREFIX: workspace-docs
+
+      # Pre-signed URL controls (Option B)
+      S3_FORCE_SIGNED: "true"                # always return a pre-signed URL
+      S3_PRESIGN_TTL_SECONDS: "604800"       # 7 days
+      # Replace the internal garage hostname in the signed URL so it works from the host:
+      S3_PRESIGN_BASE_URL: http://localhost:3900
+
+      # (Public website base is unused when S3_FORCE_SIGNED=true; kept here for clarity)
+      S3_PUBLIC_BASE_URL: ""
+      S3_PUBLIC_READ: "true"
     ports:
       - "${WORKSPACE_DOC_PORT:-8002}:8002"
     volumes:
@@ -99,5 +120,24 @@ services:
       # Optional local-fallback context (if you ever drop artifacts.json for a workspace)
       - ${WORKSPACE_HOST_DIR:-../data/workspace}:/workspace
     extra_hosts:
-      # <-- this line makes 'host.docker.internal' resolvable in this container
+      # Keep this for host-only services like the artifact service.
       - "host.docker.internal:host-gateway"
+  
+  garage:
+    image: dxflrs/garage:v2.1.0
+    container_name: garage
+    restart: unless-stopped
+    ports:
+      - "3900:3900"   # S3 API
+      - "3901:3901"   # RPC
+      - "3902:3902"   # Static web (optional)
+      - "3903:3903"   # Admin API
+    volumes:
+      - ./garage/garage.toml:/etc/garage.toml:ro
+      - ./garage/meta:/var/lib/garage/meta
+      - ./garage/data:/var/lib/garage/data
+    environment:
+      - RUST_LOG=garage=info
+
+volumes:
+  garage-meta:
