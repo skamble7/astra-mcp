@@ -65,179 +65,6 @@ def _json_size_bytes(obj: Any) -> int:
     except Exception:
         return 0
 
-# ----------------------- diagrams & renderers ----------------
-def _render_diagrams(diagrams: Any) -> str:
-    if not isinstance(diagrams, list) or not diagrams:
-        return ""
-    lines: List[str] = []
-    lines.append("#### Diagram(s)\n")
-    for d in diagrams:
-        if not isinstance(d, dict):
-            continue
-        language = (d.get("language") or d.get("type") or "mermaid") or "mermaid"
-        payload = (
-            d.get("content")
-            or d.get("instructions")
-            or d.get("diagram")
-            or d.get("code")
-            or ""
-        ).strip()
-        name = _safe_str(d.get("name")).strip()
-        if not payload:
-            continue
-        if name:
-            lines.append(f"*{name}*")
-        lines.append(f"```{language}\n{payload}\n```")
-    lines.append("")
-    return "\n".join(lines)
-
-def _summarize_scalar_props(data: Dict[str, Any]) -> str:
-    scalars = {k: v for k, v in data.items() if _is_scalar(v)}
-    if not scalars:
-        return ""
-    parts = [f"{k}={_flatten_scalar(v, 80)}" for k, v in scalars.items()]
-    return "It exposes " + ", ".join(parts) + "."
-
-def _summarize_source_block(data: Dict[str, Any]) -> str:
-    src = data.get("source")
-    if not isinstance(src, dict):
-        return ""
-    bits: List[str] = []
-    rel = src.get("relpath") or src.get("path")
-    if rel:
-        bits.append(f"path `{rel}`")
-    for key in ("sha256", "sha1", "md5", "checksum"):
-        if key in src and _is_scalar(src[key]):
-            bits.append(f"{key}={_flatten_scalar(src[key], 80)}")
-    return "Source: " + ", ".join(bits) + "." if bits else "It includes a source descriptor with additional metadata."
-
-def _bullet_list_from_scalar_list(values: List[Any], max_items: int = 12) -> List[str]:
-    items = _take(values, max_items)
-    out = [f"- {_flatten_scalar(v, 100)}" for v in items]
-    if len(values) > max_items:
-        out.append(f"- … {len(values) - max_items} more")
-    return out
-
-def _column_union(rows: List[Dict[str, Any]], max_cols: int = 6) -> List[str]:
-    freq: Dict[str, int] = {}
-    for r in rows:
-        for k in r.keys():
-            freq[k] = freq.get(k, 0) + 1
-    cols = sorted(freq.keys(), key=lambda k: (-freq[k], k))
-    return cols[:max_cols]
-
-def _render_table(rows: List[Dict[str, Any]], max_rows: int = 15) -> str:
-    if not rows:
-        return ""
-    cols = _column_union(rows)
-    if not cols:
-        return ""
-    lines = []
-    lines.append("| " + " | ".join(f"`{c}`" for c in cols) + " |")
-    lines.append("|" + "|".join(["---"] * len(cols)) + "|")
-    for r in _take(rows, max_rows):
-        lines.append("| " + " | ".join(_flatten_scalar(r.get(c), 60) for c in cols) + " |")
-    if len(rows) > max_rows:
-        lines.append(f"| … {len(rows) - max_rows} more |" + " |" * (len(cols) - 1))
-    return "\n".join(lines)
-
-def _summarize_nested(data: Dict[str, Any]) -> str:
-    lines: List[str] = []
-    for key, val in data.items():
-        if key == "source":
-            continue
-        if isinstance(val, list):
-            lines.append(f"**`{key}`**: {len(val)} item(s).")
-            if not val:
-                continue
-            if all(_is_scalar(x) for x in val):
-                lines.extend(_bullet_list_from_scalar_list(val))
-                lines.append("")
-            elif all(isinstance(x, dict) for x in val):
-                tbl = _render_table(val)
-                lines.append(tbl or "")
-                lines.append("")
-            else:
-                lines.extend(_bullet_list_from_scalar_list(val))
-                lines.append("")
-        elif isinstance(val, dict) and val:
-            kcount = len(val.keys())
-            preview = ", ".join(f"`{k}`" for k in _take(val.keys(), 10))
-            more = " …" if kcount > 10 else ""
-            lines.append(f"**`{key}`**: object with {kcount} key(s): {preview}{more}")
-    return "\n".join(lines).strip()
-
-def _render_artifact_section(art: Dict[str, Any]) -> str:
-    name = _safe_str(art.get("name") or "(unnamed)")
-    kind = _safe_str(art.get("kind") or "")
-    aid = _safe_str(art.get("artifact_id") or "")
-    data = art.get("data") if isinstance(art.get("data"), dict) else {}
-
-    lines: List[str] = []
-    lines.append(f"### {name}\n")
-
-    intro_bits: List[str] = []
-    if kind:
-        intro_bits.append(f"kind `{kind}`")
-    if aid:
-        intro_bits.append(f"id `{aid}`")
-    lines.append(
-        f"This artifact is {', '.join(intro_bits)}."
-        if intro_bits
-        else "This artifact is described by the fields below."
-    )
-
-    scalar_para = _summarize_scalar_props(data)
-    if scalar_para:
-        lines.append(scalar_para)
-
-    src_para = _summarize_source_block(data)
-    if src_para:
-        lines.append(src_para)
-
-    nested = _summarize_nested(data)
-    if nested:
-        lines.append(nested)
-
-    diagrams_md = _render_diagrams(art.get("diagrams"))
-    if diagrams_md.strip():
-        lines.append(diagrams_md)
-
-    lines.append("")
-    return "\n".join(lines)
-
-def _render_markdown_structured(
-    workspace_id: str,
-    driver_title: str,
-    driver_kind: str,
-    selected: List[Dict[str, Any]],
-) -> str:
-    total = len(selected)
-    lines: List[str] = []
-    lines.append("# Overview\n")
-    lines.append(
-        f"This document was generated for **`{driver_title}`** (kind `{driver_kind}`) in workspace `{workspace_id}`."
-    )
-    lines.append(
-        f"It summarizes **{total}** related artifact(s) selected via the kind’s dependency rules.\n"
-    )
-
-    buckets: Dict[str, List[Dict[str, Any]]] = {}
-    display: Dict[str, str] = {}
-    for a in selected:
-        k_raw = _safe_str(a.get("kind"))
-        k_key = k_raw.lower()
-        buckets.setdefault(k_key, []).append(a)
-        if k_key not in display:
-            display[k_key] = k_raw or "(empty-kind)"
-
-    for k_key, items in sorted(buckets.items(), key=lambda x: display[x[0]].lower()):
-        lines.append(f"## {display[k_key]}\n")
-        for art in items:
-            lines.append(_render_artifact_section(art))
-
-    return "\n".join(lines).strip() + "\n"
-
 # ------------------------ LLM chunking ------------------------
 def _artifact_record_for_llm(a: Dict[str, Any]) -> Dict[str, Any]:
     return {
@@ -269,13 +96,20 @@ def _chunk_artifacts_for_llm(
         chunks.append(current)
     return chunks
 
-# ------------------------ LLM (use kind's prompt.system) ------------------------
+# ------------------------ LLM (STRICTLY use kind's prompt.system) ------------------------
 async def _llm_generate_with_kind_prompt(
     system_prompt: str,
     selected_artifacts: List[Dict[str, Any]],
     work_meta: Dict[str, Any],
     settings: Settings,
 ) -> str:
+    """
+    IMPORTANT: This function does NOT inject any task prose or opinionated preamble.
+    It ONLY:
+      * passes the artifact-kind's `prompt.system` as the system message,
+      * provides the JSON payload under a single top-level key **context** in the user message,
+      * concatenates multi-part outputs verbatim.
+    """
     import asyncio as _asyncio
     from openai import AsyncOpenAI, APIError, APITimeoutError, RateLimitError
     import httpx
@@ -300,17 +134,6 @@ async def _llm_generate_with_kind_prompt(
         except Exception:
             set_max_tokens = settings.max_tokens
 
-    user_preamble = (
-        "Create a descriptive **Markdown** document summarizing the COBOL-specific artifacts in this workspace. "
-        "For each artifact:\n"
-        "- Write a brief English summary using the fields found in its `data` object (e.g., divisions, paragraphs, copybooks, source path/hashes).\n"
-        "- If the artifact includes any diagram instructions, include them exactly as fenced code blocks using the correct language "
-        "(default to `mermaid` if unspecified). Do not alter the diagram code.\n"
-        "- Do not invent fields; only describe what's present in the provided JSON.\n"
-        "- Keep the structure clean with headings per artifact.\n\n"
-        "You will receive the artifacts in one or more parts. Summarize only the artifacts present in the current part."
-    )
-
     async def _call_with_retries(req: Dict[str, Any], *, part_idx: int, json_bytes: int) -> str:
         backoff = 0.8
         last_err: Exception | None = None
@@ -333,14 +156,19 @@ async def _llm_generate_with_kind_prompt(
 
     outputs: List[str] = []
     for idx, chunk in enumerate(chunks, start=1):
+        # The artifact kind's prompt in your registry (see example you shared) expects a top-level "context".
         context = {
             "workspace": {"id": work_meta.get("workspace_id"), "part": idx, "of": total_parts},
             "artifacts": chunk,
         }
+        user_payload = {"context": context}
+
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_preamble + "\n\nJSON Context:\n" + json.dumps(context, ensure_ascii=False)},
+            # NO extra instructions, only the JSON the prompt expects:
+            {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
         ]
+
         req: Dict[str, Any] = {
             "model": settings.llm_model,
             "temperature": settings.temperature,
@@ -349,16 +177,23 @@ async def _llm_generate_with_kind_prompt(
         if set_max_tokens is not None and set_max_tokens > 0:
             req["max_tokens"] = set_max_tokens
 
-        json_bytes = _json_size_bytes(context)
-        log.info(f"llm.call.begin model={settings.llm_model} part={idx}/{total_parts} artifacts_in_chunk={len(chunk)} json_bytes={json_bytes} timeout_sec={settings.llm_request_timeout}")
+        json_bytes = _json_size_bytes(user_payload)
+        log.info(
+            "llm.call.begin model=%s part=%s/%s artifacts_in_chunk=%s json_bytes=%s timeout_sec=%s",
+            settings.llm_model, idx, total_parts, len(chunk), json_bytes, settings.llm_request_timeout
+        )
         try:
             text = await _call_with_retries(req, part_idx=idx, json_bytes=json_bytes)
-            log.info(f"llm.call.success part={idx}/{total_parts} output_len={len(text)}")
+            log.info("llm.call.success part=%s/%s output_len=%s", idx, total_parts, len(text))
         except Exception as e:
-            log.error(f"llm.call.failed_after_retries part={idx}/{total_parts} error={e.__class__.__name__}: {e}")
+            log.error(
+                "llm.call.failed_after_retries part=%s/%s error=%s: %s",
+                idx, total_parts, e.__class__.__name__, e
+            )
             text = f"\n> _Note: generation for part {idx}/{total_parts} failed after retries ({e.__class__.__name__}). Skipping this part._\n"
 
         if text:
+            # We do not try to reformat/validate here — the kind's prompt owns the output shape/format.
             if idx > 1 and not text.startswith("\n"):
                 outputs.append("\n")
             outputs.append(text)
@@ -389,11 +224,11 @@ async def generate_workspace_document(params: GenerateParams) -> Dict[str, Any]:
         f"s3={json.dumps(s3_snapshot, ensure_ascii=False)}"
     )
 
-    # 1) Resolve workspace artifacts
+    # 1) Resolve workspace artifacts (the *data* the prompt will operate on)
     all_arts = await fetch_workspace_artifacts(params.workspace_id)
     log.info(f"gen.fetch.done artifact_count={len(all_arts)}")
 
-    # 2) Resolve kind declaration
+    # 2) Resolve kind declaration (the *instructions* live here)
     kind_def = await fetch_kind_definition(params.kind_id)
     if not kind_def:
         raise RuntimeError(f"Kind not found: {params.kind_id}")
@@ -405,33 +240,40 @@ async def generate_workspace_document(params: GenerateParams) -> Dict[str, Any]:
     if latest is None:
         raise RuntimeError(f"No schema_versions available for kind: {params.kind_id}")
 
-    # 4) Shortlist
+    # 4) Shortlist the artifacts as directed by the kind's dependency declaration
     depends_on = latest.get("depends_on") or {}
     hard_kinds = depends_on.get("hard") or []
     soft_kinds = depends_on.get("soft") or []
     selected = shortlist_by_kinds(all_arts, hard_kinds, soft_kinds)
 
-    # 5) Generate Markdown (deterministic, maybe replaced by LLM)
-    driver_title = kind_def.get("title") or params.kind_id
-    driver_kind = params.kind_id
-    deterministic_md = _render_markdown_structured(params.workspace_id, driver_title, driver_kind, selected)
-
-    final_md = deterministic_md
+    # 5) Generate the document STRICTLY per the kind's prompt
     system_prompt = (latest.get("prompt") or {}).get("system") or ""
-    if settings.enable_real_llm and system_prompt.strip():
-        try:
-            llm_md = await _llm_generate_with_kind_prompt(
-                system_prompt=system_prompt,
-                selected_artifacts=selected,
-                work_meta={"workspace_id": params.workspace_id, "selected_count": len(selected)},
-                settings=settings,
-            )
-            if llm_md:
-                final_md = llm_md
-        except Exception:
-            log.exception("llm.generation.failed")
+    if not system_prompt.strip():
+        # This server must NOT invent prompts. If none provided, fail clearly.
+        raise RuntimeError(
+            f"Artifact kind '{params.kind_id}' does not provide prompt.system; "
+            "document generation is prompt-driven and cannot proceed without it."
+        )
+    if not settings.enable_real_llm:
+        raise RuntimeError(
+            "ENABLE_REAL_LLM is false; this server is prompt-driven and requires a live LLM."
+        )
 
-    # 6) Optional length limit
+    try:
+        final_md = await _llm_generate_with_kind_prompt(
+            system_prompt=system_prompt,
+            selected_artifacts=selected,
+            work_meta={"workspace_id": params.workspace_id, "selected_count": len(selected)},
+            settings=settings,
+        )
+    except Exception:
+        log.exception("llm.generation.failed")
+        raise
+
+    if not final_md or not isinstance(final_md, str):
+        raise RuntimeError("Document generation produced no text content.")
+
+    # 6) Optional length limit (still enforced if present in narratives_spec)
     narratives = latest.get("narratives_spec") or {}
     max_chars = narratives.get("max_length_chars")
     if isinstance(max_chars, int) and max_chars > 0 and len(final_md) > max_chars:
@@ -439,6 +281,8 @@ async def generate_workspace_document(params: GenerateParams) -> Dict[str, Any]:
 
     # 7) Write file locally
     out_dir = ensure_output_dir()
+    driver_title = kind_def.get("title") or params.kind_id
+    driver_kind = params.kind_id
     filename = f"workspace_{params.workspace_id}_{driver_kind}_summary.md"
     path = out_dir / filename
     path.write_text(final_md, encoding="utf-8")
@@ -492,35 +336,54 @@ async def generate_workspace_document(params: GenerateParams) -> Dict[str, Any]:
             missing.append("S3_SECRET_KEY")
         if not (settings.s3_bucket or "").strip():
             missing.append("S3_BUCKET")
-        log.info(f"s3.skip_upload upload_skipped missing={','.join(missing) if missing else 'unknown'} s3_enabled={settings.s3_enabled}")
+        log.info(
+            "s3.skip_upload upload_skipped missing=%s s3_enabled=%s",
+            ",".join(missing) if missing else "unknown",
+            settings.s3_enabled,
+        )
 
-    # 8) Return artifact
-    result: Dict[str, Any] = {
+    # 8) Return artifacts (array) with kind-specific payload under "data"
+    artifact: Dict[str, Any] = {
+        "kind_id": driver_kind,  # e.g., cam.asset.cobol_artifacts_summary
         "name": f"{driver_title} (Workspace {params.workspace_id})",
-        "description": f"Generated descriptive document for {driver_kind}; based on depends_on hard/soft kinds over workspace artifacts.",
+
+        # ---- Kind payload (the consumer maps this into your file-detail kind) ----
+        "data": {
+            "workspace_id": params.workspace_id,
+            "text": final_md,  # Markdown body as produced by the prompt
+            "diagrams": [],    # left empty unless your prompt generates/embed info differently
+            "source": {
+                "path": str(path),
+                "storage_uri": storage_uri,
+                "download_url": download_url,
+                "mime_type": MIME,
+                "encoding": "utf-8",
+                "size_bytes": size,
+                "sha256": sha,
+            },
+            "title": driver_title,
+            "kind_id": driver_kind,
+            "selected_count": len(selected),
+            "llm": settings.llm_model,
+        },
+
+        # ---- Top-level convenience metadata (kept for previews) ----
+        "preview": {"text_excerpt": final_md[:260]},
+        "mime_type": MIME,
+        "encoding": "utf-8",
         "filename": filename,
         "path": str(path),
         "storage_uri": storage_uri,
         "download_url": download_url,
-        "size_bytes": size,
-        "mime_type": MIME,
-        "encoding": "utf-8",
         "checksum": {"sha256": sha},
-        "source_system": "Astra Workspace Doc Generator",
         "tags": ["workspace", "summary", "markdown", "generic", "diagrams"],
         "created_at": _now_iso(),
         "updated_at": _now_iso(),
-        "preview": {"text_excerpt": final_md[:260]},
-        "metadata": {
-            "workspace_id": params.workspace_id,
-            "kind_id": params.kind_id,
-            "selected_count": len(selected),
-            "llm": settings.llm_model if settings.enable_real_llm and system_prompt.strip() else "disabled",
-            "s3_bucket": settings.s3_bucket,
-            "s3_key_prefix": settings.s3_prefix,
-            "s3_endpoint": settings.s3_endpoint_url,
-        },
     }
 
-    log.info(f"gen.success workspace_id={params.workspace_id} driver_kind={driver_kind} uploaded={bool(download_url)} download_url={download_url}")
-    return result
+    log.info(
+        "gen.success workspace_id=%s driver_kind=%s uploaded=%s download_url=%s",
+        params.workspace_id, driver_kind, bool(download_url), download_url
+    )
+    # IMPORTANT: wrap in artifacts[] so the conductor (artifacts_prop=artifacts) persists it
+    return {"artifacts": [artifact]}

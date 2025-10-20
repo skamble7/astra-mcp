@@ -41,12 +41,12 @@ async def _run_doc_job(job_id: str, args: dict[str, Any]) -> None:
     job["message"] = "Generating document…"
     try:
         params = GenerateParams(**args)
-        result = await generate_workspace_document(params)
+        result = await generate_workspace_document(params)  # returns {"artifacts": [ ... ]}
         job["status"] = "done"
         job["progress"] = 100.0
         job["message"] = "Document generated."
         job["result"] = result
-        job["artifacts"] = [result]
+        job["artifacts"] = result.get("artifacts", [])
     except Exception as e:
         log.exception(f"job.failed job_id={job_id}")
         job["status"] = "error"
@@ -90,6 +90,7 @@ async def workspace_document_status(job_id: str) -> dict:
 async def tool_generate_workspace_document(workspace_id: str, kind_id: str) -> Dict[str, Any]:
     log.info(f"tool.call name=generate.workspace.document workspace_id={workspace_id} kind_id={kind_id}")
     params = GenerateParams(workspace_id=workspace_id, kind_id=kind_id)
+    # returns {"artifacts": [ ... ]} so the conductor can pick up artifacts directly
     return await generate_workspace_document(params)
 
 try:
