@@ -1,0 +1,184 @@
+{
+  "_id": "cam.inputs.raina",
+  "title": "Raina Input (AVC/FSS/PSS)",
+  "category": "inputs",
+  "aliases": ["cam.raina.input", "cam.discovery.raina"],
+  "status": "active",
+  "latest_schema_version": "1.0.0",
+  "schema_versions": [
+    {
+      "version": "1.0.0",
+      "json_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://astra.example/schemas/raina-input.json",
+        "title": "Raina Input",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["inputs"],
+        "properties": {
+          "inputs": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["avc", "fss", "pss"],
+            "properties": {
+              "avc": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "vision",
+                  "problem_statements",
+                  "goals",
+                  "non_functionals",
+                  "constraints",
+                  "assumptions",
+                  "context",
+                  "success_criteria"
+                ],
+                "properties": {
+                  "vision": { "type": "array", "items": { "type": "string" }, "default": [] },
+                  "problem_statements": { "type": "array", "items": { "type": "string" }, "default": [] },
+                  "goals": {
+                    "type": "array",
+                    "default": [],
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["id", "text"],
+                      "properties": {
+                        "id": { "type": "string", "minLength": 1 },
+                        "text": { "type": "string", "minLength": 1 },
+                        "metric": { "type": ["string", "null"] }
+                      }
+                    }
+                  },
+                  "non_functionals": {
+                    "type": "array",
+                    "default": [],
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["type", "target"],
+                      "properties": {
+                        "type": { "type": "string", "minLength": 1 },
+                        "target": { "type": "string", "minLength": 1 }
+                      }
+                    }
+                  },
+                  "constraints": { "type": "array", "items": { "type": "string" }, "default": [] },
+                  "assumptions": { "type": "array", "items": { "type": "string" }, "default": [] },
+                  "context": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["domain", "actors"],
+                    "properties": {
+                      "domain": { "type": "string" },
+                      "actors": { "type": "array", "items": { "type": "string" }, "default": [] }
+                    }
+                  },
+                  "success_criteria": {
+                    "type": "array",
+                    "default": [],
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["kpi", "target"],
+                      "properties": {
+                        "kpi": { "type": "string", "minLength": 1 },
+                        "target": { "type": "string", "minLength": 1 }
+                      }
+                    }
+                  }
+                }
+              },
+              "fss": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["stories"],
+                "properties": {
+                  "stories": {
+                    "type": "array",
+                    "default": [],
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["key", "title"],
+                      "properties": {
+                        "key": { "type": "string", "minLength": 1 },
+                        "title": { "type": "string", "minLength": 1 },
+                        "description": {
+                          "oneOf": [
+                            { "type": "string" },
+                            { "type": "array", "items": { "type": "string" } },
+                            { "type": "null" }
+                          ]
+                        },
+                        "acceptance_criteria": { "type": "array", "items": { "type": "string" }, "default": [] },
+                        "tags": { "type": "array", "items": { "type": "string" }, "default": [] }
+                      }
+                    }
+                  }
+                }
+              },
+              "pss": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["paradigm", "style", "tech_stack"],
+                "properties": {
+                  "paradigm": { "type": "string", "minLength": 1 },
+                  "style": { "type": "array", "items": { "type": "string" }, "default": [] },
+                  "tech_stack": { "type": "array", "items": { "type": "string" }, "default": [] }
+                }
+              }
+            }
+          }
+        }
+      },
+      "additional_props_policy": "forbid",
+      "prompt": {
+        "system": "Validate and store a Raina Input document (AVC/FSS/PSS). Emit JSON strictly conforming to the schema; do not add fields.",
+        "strict_json": true
+      },
+      "depends_on": { "hard": [], "soft": [] },
+      "identity": { "natural_key": ["inputs.avc.context.domain"] },
+      "examples": [
+        {
+          "inputs": {
+            "avc": {
+              "vision": ["Modernize the COBOL-based retail equity post-trade system into a real-time, scalable pipeline..."],
+              "problem_statements": ["The current mainframe application is a batch monolith..."],
+              "goals": [{ "id": "G1", "text": "Ingest and validate trade and quote streams...", "metric": "validation throughput in trades per second" }],
+              "non_functionals": [{ "type": "performance", "target": "p95<60s" }],
+              "constraints": ["Must operate on multiple currencies (USD/EUR/GBP)"],
+              "assumptions": ["Modern platform will have access to GPU resources..."],
+              "context": { "domain": "Retail Equity Post-Trade", "actors": ["Trader", "RiskAnalyst"] },
+              "success_criteria": [{ "kpi": "validation_latency", "target": "< 1 second" }]
+            },
+            "fss": {
+              "stories": [
+                {
+                  "key": "EPT-101",
+                  "title": "Ingest and validate trades",
+                  "description": ["As the system, I need to ingest raw trade events..."],
+                  "acceptance_criteria": ["Trades with invalid side values are marked invalid"],
+                  "tags": ["domain:trade", "function:validation", "actor:Trader"]
+                }
+              ]
+            },
+            "pss": {
+              "paradigm": "Data Engineering",
+              "style": ["Streaming Pipeline", "Batch-able Steps for Back-Filling"],
+              "tech_stack": ["Apache Kafka", "Apache Flink", "RAPIDS cuDF"]
+            }
+          }
+        }
+      ],
+      "diagram_recipes": [],
+      "narratives_spec": {
+        "allowed_formats": ["markdown", "asciidoc"],
+        "default_format": "markdown",
+        "max_length_chars": 200000,
+        "allowed_locales": ["en-US"]
+      }
+    }
+  ]
+}

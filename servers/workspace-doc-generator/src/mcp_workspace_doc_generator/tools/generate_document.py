@@ -6,7 +6,7 @@ import datetime as dt
 import json
 import logging
 import os
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, Iterable, List, Tuple
 
 from ..models.params import GenerateParams
 from ..utils.artifacts_fetch import (
@@ -24,7 +24,9 @@ from ..utils.storage import (
 )
 
 log = logging.getLogger("mcp.workspace.doc.generate")
-MIME = "text/markdown"
+
+# We will honor mime_type from the LLM payload per kind prompt; this is only a fallback.
+FALLBACK_MIME = "text/markdown"
 
 # ----------------------- small helpers -----------------------
 def _now_iso() -> str:
@@ -96,23 +98,118 @@ def _chunk_artifacts_for_llm(
         chunks.append(current)
     return chunks
 
+# ------------------------ JSON parsing helpers ------------------------
+def _extract_last_json_object(text: str) -> Dict[str, Any]:
+    """
+    Best-effort parser for cases where the model returns multiple JSON objects
+    back-to-back. We walk the string and decode repeatedly; the last successful
+    decode is returned.
+    """
+    text = text.strip()
+    decoder = json.JSONDecoder()
+    idx = 0
+    last_obj: Dict[str, Any] | None = None
+    while idx < len(text):
+        # Skip leading non-json noise if any (should not occur with strict kinds)
+        while idx < len(text) and text[idx].isspace():
+            idx += 1
+        if idx >= len(text):
+            break
+        try:
+            obj, end = decoder.raw_decode(text, idx)
+            if isinstance(obj, dict):
+                last_obj = obj  # keep the last one
+            idx = end
+        except json.JSONDecodeError:
+            # Move forward one char and try again (defensive)
+            idx += 1
+    if last_obj is None:
+        raise ValueError("No JSON object could be decoded from LLM response.")
+    return last_obj
+
 # ------------------------ LLM (STRICTLY use kind's prompt.system) ------------------------
-async def _llm_generate_with_kind_prompt(
+async def _llm_generate_with_kind_prompt_single_json(
     system_prompt: str,
     selected_artifacts: List[Dict[str, Any]],
     work_meta: Dict[str, Any],
     settings: Settings,
 ) -> str:
     """
-    IMPORTANT: This function does NOT inject any task prose or opinionated preamble.
-    It ONLY:
-      * passes the artifact-kind's `prompt.system` as the system message,
-      * provides the JSON payload under a single top-level key **context** in the user message,
-      * concatenates multi-part outputs verbatim.
+    STRICT-JSON mode: send one request with full context and expect exactly one JSON object back.
     """
-    import asyncio as _asyncio
     from openai import AsyncOpenAI, APIError, APITimeoutError, RateLimitError
     import httpx
+    import asyncio as _asyncio
+
+    api_key = (os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_APIKEY") or "").strip()
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY is not set")
+
+    client = AsyncOpenAI(api_key=api_key, timeout=settings.llm_request_timeout)
+
+    # Build one big context
+    context = {
+        "workspace": {"id": work_meta.get("workspace_id"), "part": 1, "of": 1},
+        "artifacts": [_artifact_record_for_llm(a) for a in selected_artifacts],
+    }
+    user_payload = {"context": context}
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
+    ]
+
+    req: Dict[str, Any] = {
+        "model": settings.llm_model,
+        "temperature": settings.temperature,
+        "messages": messages,
+    }
+    # Respect optional max tokens if user/environment configured
+    max_tokens_env = (os.getenv("LLM_MAX_TOKENS") or "").strip().lower()
+    if max_tokens_env not in {"", "0", "-1", "none", "null"}:
+        try:
+            req["max_tokens"] = int(max_tokens_env)
+        except Exception:
+            req["max_tokens"] = settings.max_tokens
+
+    # Simple retry loop
+    backoff = 0.8
+    last_err: Exception | None = None
+    for attempt in range(1, 1 + 4):
+        try:
+            jb = _json_size_bytes(user_payload)
+            log.info(
+                "llm.call.begin (strict) model=%s json_bytes=%s timeout_sec=%s",
+                settings.llm_model, jb, settings.llm_request_timeout
+            )
+            resp = await client.chat.completions.create(**req)
+            out = (resp.choices[0].message.content or "").strip()
+            log.info("llm.call.success (strict) output_len=%s", len(out))
+            return out
+        except (APITimeoutError, httpx.ReadTimeout, httpx.ConnectTimeout) as e:
+            last_err = e
+            log.warning("llm.timeout attempt=%s", attempt)
+        except (RateLimitError,) as e:
+            last_err = e
+            log.warning("llm.rate_limited attempt=%s", attempt)
+        except (APIError, httpx.HTTPError) as e:
+            last_err = e
+            log.warning("llm.api_error attempt=%s detail=%s", attempt, e)
+        await _asyncio.sleep(backoff)
+        backoff = min(backoff * 2.0, 10.0)
+    raise last_err if last_err else RuntimeError("LLM call failed (strict mode)")
+
+async def _llm_generate_with_kind_prompt_chunked_markdown(
+    system_prompt: str,
+    selected_artifacts: List[Dict[str, Any]],
+    work_meta: Dict[str, Any],
+    settings: Settings,
+) -> str:
+    """
+    Non-strict mode (for kinds that want freeform/markdown and allow multi-part concatenation).
+    """
+    from openai import AsyncOpenAI, APIError, APITimeoutError, RateLimitError
+    import httpx
+    import asyncio as _asyncio
 
     api_key = (os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_APIKEY") or "").strip()
     if not api_key:
@@ -156,7 +253,6 @@ async def _llm_generate_with_kind_prompt(
 
     outputs: List[str] = []
     for idx, chunk in enumerate(chunks, start=1):
-        # The artifact kind's prompt in your registry (see example you shared) expects a top-level "context".
         context = {
             "workspace": {"id": work_meta.get("workspace_id"), "part": idx, "of": total_parts},
             "artifacts": chunk,
@@ -165,7 +261,6 @@ async def _llm_generate_with_kind_prompt(
 
         messages = [
             {"role": "system", "content": system_prompt},
-            # NO extra instructions, only the JSON the prompt expects:
             {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
         ]
 
@@ -193,7 +288,6 @@ async def _llm_generate_with_kind_prompt(
             text = f"\n> _Note: generation for part {idx}/{total_parts} failed after retries ({e.__class__.__name__}). Skipping this part._\n"
 
         if text:
-            # We do not try to reformat/validate here — the kind's prompt owns the output shape/format.
             if idx > 1 and not text.startswith("\n"):
                 outputs.append("\n")
             outputs.append(text)
@@ -247,7 +341,10 @@ async def generate_workspace_document(params: GenerateParams) -> Dict[str, Any]:
     selected = shortlist_by_kinds(all_arts, hard_kinds, soft_kinds)
 
     # 5) Generate the document STRICTLY per the kind's prompt
-    system_prompt = (latest.get("prompt") or {}).get("system") or ""
+    prompt_block = (latest.get("prompt") or {})
+    system_prompt = prompt_block.get("system") or ""
+    strict_json = bool(prompt_block.get("strict_json"))
+
     if not system_prompt.strip():
         # This server must NOT invent prompts. If none provided, fail clearly.
         raise RuntimeError(
@@ -260,48 +357,81 @@ async def generate_workspace_document(params: GenerateParams) -> Dict[str, Any]:
         )
 
     try:
-        final_md = await _llm_generate_with_kind_prompt(
-            system_prompt=system_prompt,
-            selected_artifacts=selected,
-            work_meta={"workspace_id": params.workspace_id, "selected_count": len(selected)},
-            settings=settings,
-        )
+        if strict_json:
+            llm_raw = await _llm_generate_with_kind_prompt_single_json(
+                system_prompt=system_prompt,
+                selected_artifacts=selected,
+                work_meta={"workspace_id": params.workspace_id, "selected_count": len(selected)},
+                settings=settings,
+            )
+        else:
+            llm_raw = await _llm_generate_with_kind_prompt_chunked_markdown(
+                system_prompt=system_prompt,
+                selected_artifacts=selected,
+                work_meta={"workspace_id": params.workspace_id, "selected_count": len(selected)},
+                settings=settings,
+            )
     except Exception:
         log.exception("llm.generation.failed")
         raise
 
-    if not final_md or not isinstance(final_md, str):
-        raise RuntimeError("Document generation produced no text content.")
+    if not llm_raw or not isinstance(llm_raw, str):
+        raise RuntimeError("Document generation produced no text.")
 
-    # 6) Optional length limit (still enforced if present in narratives_spec)
+    # 6) Parse strict JSON envelope from the LLM and extract Markdown + metadata
+    try:
+        # For strict kinds, we still attempt recovery if multiple JSON objects appear.
+        llm_obj = _extract_last_json_object(llm_raw) if strict_json else json.loads(llm_raw)
+    except Exception as e:
+        log.error("llm.json.parse.failed strict=%s raw_prefix=%s…", strict_json, llm_raw[:200].replace("\n", " "))
+        raise RuntimeError(
+            "Artifact kind declared strict_json, but LLM did not return a valid single JSON object."
+        ) from e
+
+    md_content = llm_obj.get("content")
+    if not isinstance(md_content, str) or not md_content.strip():
+        raise RuntimeError("LLM JSON missing non-empty string field `content`.")
+
+    # Optional validation to help catch prompt deviations
+    if not md_content.lstrip().startswith("# Data Pipeline Architecture Guidance"):
+        log.warning("markdown.title.mismatch: content does not start with expected H1")
+
+    # Adopt metadata from the LLM JSON, with sensible fallbacks
+    doc_name = llm_obj.get("name") or "Data Pipeline Architecture Guidance"
+    doc_desc = llm_obj.get("description") or "Architecture guidance document"
+    filename_from_llm = llm_obj.get("filename") or f"workspace_{params.workspace_id}_data-pipeline-architecture-guidance.md"
+    mime_from_llm = llm_obj.get("mime_type") or FALLBACK_MIME
+    tags_from_llm = llm_obj.get("tags") or ["architecture", "guidance", "data-pipeline"]
+
+    # 7) Optional length limit (still enforced if present in narratives_spec)
     narratives = latest.get("narratives_spec") or {}
     max_chars = narratives.get("max_length_chars")
-    if isinstance(max_chars, int) and max_chars > 0 and len(final_md) > max_chars:
-        final_md = final_md[:max_chars]
+    if isinstance(max_chars, int) and max_chars > 0 and len(md_content) > max_chars:
+        md_content = md_content[:max_chars]
 
-    # 7) Write file locally
+    # 8) Write file locally (use the filename from the LLM JSON when present)
     out_dir = ensure_output_dir()
     driver_title = kind_def.get("title") or params.kind_id
-    driver_kind = params.kind_id
-    filename = f"workspace_{params.workspace_id}_{driver_kind}_summary.md"
+    driver_kind = params.kind_id  # e.g., cam.documents.data-pipeline-arch-guidance
+    filename = filename_from_llm
     path = out_dir / filename
-    path.write_text(final_md, encoding="utf-8")
+    path.write_text(md_content, encoding="utf-8")
     sha = sha256_of_file(path)
     size = path.stat().st_size
-    log.info(f"gen.write.ok path={path} size_bytes={len(final_md.encode('utf-8'))}")
+    log.info("gen.write.ok path=%s size_bytes=%s", path, len(md_content.encode("utf-8")))
 
-    # 7b) Upload to Garage (S3) if configured
+    # 9) Upload to Garage (S3) if configured
     storage_uri = f"file://{path}"
     download_url: str | None = None
     if settings.s3_enabled and settings.s3_bucket:
         key = f"{(settings.s3_prefix or 'workspace-docs').strip('/')}/{params.workspace_id}/{filename}"
-        log.info(f"s3.plan bucket={settings.s3_bucket} key={key}")
+        log.info("s3.plan bucket=%s key=%s", settings.s3_bucket, key)
         ok = upload_file_to_s3(
             settings=settings,
             local_path=path,
             bucket=settings.s3_bucket,
             key=key,
-            content_type=MIME,
+            content_type=mime_from_llm,
         )
         if ok:
             storage_uri = f"s3://{settings.s3_bucket}/{key}"
@@ -320,7 +450,7 @@ async def generate_workspace_document(params: GenerateParams) -> Dict[str, Any]:
             else:
                 dl = build_public_download_url(settings, settings.s3_bucket, key)
                 if dl:
-                    log.info(f"s3.download_url url={dl}")
+                    log.info("s3.download_url url=%s", dl)
 
             if dl:
                 download_url = dl
@@ -342,41 +472,42 @@ async def generate_workspace_document(params: GenerateParams) -> Dict[str, Any]:
             settings.s3_enabled,
         )
 
-    # 8) Return artifacts (array) with kind-specific payload under "data"
+    # 10) Build CAM artifact payload
+    #     The kind's json_schema applies to the **data** object; include LLM JSON + source hints.
+    data_payload: Dict[str, Any] = dict(llm_obj)  # start with the model's JSON (name/filename/content/etc.)
+    # Ensure key fields are present/normalized
+    data_payload.setdefault("name", doc_name)
+    data_payload.setdefault("description", doc_desc)
+    data_payload.setdefault("filename", filename)
+    data_payload.setdefault("mime_type", mime_from_llm)
+    data_payload.setdefault("tags", tags_from_llm)
+
+    # Add generator/source hints (schema allows additional properties)
+    data_payload["workspace_id"] = params.workspace_id
+    data_payload["source"] = {
+        "path": str(path),
+        "storage_uri": storage_uri,
+        "download_url": download_url,
+        "mime_type": mime_from_llm,
+        "encoding": "utf-8",
+        "size_bytes": size,
+        "sha256": sha,
+    }
+
     artifact: Dict[str, Any] = {
-        "kind_id": driver_kind,  # e.g., cam.asset.cobol_artifacts_summary
-        "name": f"{driver_title} (Workspace {params.workspace_id})",
-
-        # ---- Kind payload (the consumer maps this into your file-detail kind) ----
-        "data": {
-            "workspace_id": params.workspace_id,
-            "text": final_md,  # Markdown body as produced by the prompt
-            "diagrams": [],    # left empty unless your prompt generates/embed info differently
-            "source": {
-                "path": str(path),
-                "storage_uri": storage_uri,
-                "download_url": download_url,
-                "mime_type": MIME,
-                "encoding": "utf-8",
-                "size_bytes": size,
-                "sha256": sha,
-            },
-            "title": driver_title,
-            "kind_id": driver_kind,
-            "selected_count": len(selected),
-            "llm": settings.llm_model,
-        },
-
-        # ---- Top-level convenience metadata (kept for previews) ----
-        "preview": {"text_excerpt": final_md[:260]},
-        "mime_type": MIME,
+        "kind_id": driver_kind,  # e.g., cam.documents.data-pipeline-arch-guidance
+        "name": f"{doc_name} (Workspace {params.workspace_id})",
+        "data": data_payload,  # <-- matches the kind's json_schema
+        # Convenience preview/metadata for UIs
+        "preview": {"text_excerpt": md_content[:260]},
+        "mime_type": mime_from_llm,
         "encoding": "utf-8",
         "filename": filename,
         "path": str(path),
         "storage_uri": storage_uri,
         "download_url": download_url,
         "checksum": {"sha256": sha},
-        "tags": ["workspace", "summary", "markdown", "generic", "diagrams"],
+        "tags": tags_from_llm,
         "created_at": _now_iso(),
         "updated_at": _now_iso(),
     }
