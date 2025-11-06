@@ -1,0 +1,95 @@
+{
+  "_id": "cam.jcl.job",
+  "title": "JCL Job",
+  "category": "cobol",
+  "status": "active",
+  "latest_schema_version": "1.0.0",
+  "schema_versions": [
+    {
+      "version": "1.0.0",
+      "json_schema": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["job_name", "source", "steps"],
+        "properties": {
+          "job_name": { "type": ["string", "null"] },
+          "source": {
+            "type": ["object", "null"],
+            "additionalProperties": true,
+            "properties": {
+              "relpath": { "type": ["string", "null"] },
+              "sha256": { "type": ["string", "null"] }
+            }
+          },
+          "steps": {
+            "type": ["array", "null"],
+            "items": {
+              "type": "object",
+              "additionalProperties": true,
+              "required": ["step_name"],
+              "properties": {
+                "step_name": { "type": ["string", "null"] },
+                "seq": { "type": ["integer", "string", "null"] },
+                "program": { "type": ["string", "null"] },
+                "condition": { "type": ["string", "null"] },
+                "dds": {
+                  "type": ["array", "null"],
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "required": ["ddname"],
+                    "properties": {
+                      "ddname": { "type": ["string", "null"] },
+                      "dataset": { "type": ["string", "null"] },
+                      "direction": { "type": ["string", "null"] }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "additional_props_policy": "allow",
+      "prompt": {
+        "system": "Parse JCL into an ordered list of steps with DD statements. Keep program names as written.",
+        "strict_json": true
+      },
+      "depends_on": { "hard": ["cam.asset.source_index"] },
+      "identity": { "natural_key": ["job_name"] },
+      "examples": [
+        {
+          "job_name": "POSTTRAN",
+          "source": { "relpath": "batch/POSTTRAN.jcl", "sha256": "..." },
+          "steps": [
+            {
+              "step_name": "STEP1",
+              "seq": 1,
+              "program": "POSTTRAN",
+              "dds": [
+                { "ddname": "INFILE", "dataset": "TRAN.IN", "direction": "IN" },
+                { "ddname": "OUTFILE", "dataset": "LEDGER.OUT", "direction": "OUT" }
+              ]
+            }
+          ]
+        }
+      ],
+      "diagram_recipes": [
+        {
+          "id": "jcl.flow",
+          "title": "JCL Job Flow (Steps)",
+          "view": "flowchart",
+          "language": "mermaid",
+          "description": "Simple TD flow through steps by seq, annotated with program names.",
+          "template": "flowchart TD\n  START([{{ data.job_name }} START])\n  {% for s in (data.steps or [])|sort(attribute='seq') %}\n  {{ s.step_name }}([{{ s.step_name }}\\n{{ s.program }}])\n  {% endfor %}\n  {% for s in (data.steps or [])|sort(attribute='seq') %}\n    {% set next = loop.index0 + 1 %}\n    {% if next < ((data.steps or [])|length) %}\n  {{ data.steps[loop.index0].step_name }} --> {{ data.steps[next].step_name }}\n    {% endif %}\n  {% endfor %}\n  END([END])"
+        }
+      ],
+      "narratives_spec": {
+        "allowed_formats": ["markdown", "asciidoc"],
+        "default_format": "markdown",
+        "max_length_chars": 20000,
+        "allowed_locales": ["en-US"]
+      }
+    }
+  ]
+}

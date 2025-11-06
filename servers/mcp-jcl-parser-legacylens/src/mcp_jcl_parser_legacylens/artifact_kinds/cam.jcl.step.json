@@ -1,0 +1,68 @@
+{
+  "_id": "cam.jcl.step",
+  "title": "JCL Step",
+  "category": "cobol",
+  "status": "active",
+  "latest_schema_version": "1.0.0",
+  "schema_versions": [
+    {
+      "version": "1.0.0",
+      "json_schema": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["job_name", "step_name"],
+        "properties": {
+          "job_name": { "type": ["string", "null"] },
+          "step_name": { "type": ["string", "null"] },
+          "seq": { "type": ["integer", "string", "null"] },
+          "program": { "type": ["string", "null"] },
+          "dds": {
+            "type": ["array", "null"],
+            "items": {
+              "type": "object",
+              "additionalProperties": true,
+              "required": ["ddname"],
+              "properties": {
+                "ddname": { "type": ["string", "null"] },
+                "dataset": { "type": ["string", "null"] },
+                "direction": { "type": ["string", "null"] }
+              }
+            }
+          }
+        }
+      },
+      "additional_props_policy": "allow",
+      "prompt": {
+        "system": "Emit one strict record per JCL step to simplify graph indexing.",
+        "strict_json": true
+      },
+      "depends_on": { "hard": ["cam.jcl.job"] },
+      "identity": { "natural_key": ["job_name", "step_name"] },
+      "examples": [
+        {
+          "job_name": "POSTTRAN",
+          "step_name": "STEP1",
+          "seq": 1,
+          "program": "POSTTRAN",
+          "dds": [{ "ddname": "INFILE", "dataset": "TRAN.IN", "direction": "IN" }]
+        }
+      ],
+      "diagram_recipes": [
+        {
+          "id": "jcl.step.io",
+          "title": "JCL Step IO",
+          "view": "flowchart",
+          "language": "mermaid",
+          "description": "Visualize datasets in/out of a step.",
+          "template": "flowchart LR\n  {{ data.step_name }}([{{ data.step_name }}\\n{{ data.program }}])\n  {% for d in (data.dds or []) %}\n    {% if d.direction == \"IN\" or d.direction == \"INOUT\" %}\n  {{ d.ddname | replace(\"-\", \"_\") }}([{{ d.dataset or d.ddname }}]) --> {{ data.step_name }}\n    {% endif %}\n    {% if d.direction == \"OUT\" or d.direction == \"INOUT\" %}\n  {{ data.step_name }} --> {{ d.ddname | replace(\"-\", \"_\") }}([{{ d.dataset or d.ddname }}])\n    {% endif %}\n  {% endfor %}"
+        }
+      ],
+      "narratives_spec": {
+        "allowed_formats": ["markdown", "asciidoc"],
+        "default_format": "markdown",
+        "max_length_chars": 20000,
+        "allowed_locales": ["en-US"]
+      }
+    }
+  ]
+}

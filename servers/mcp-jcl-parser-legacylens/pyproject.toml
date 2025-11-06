@@ -1,0 +1,49 @@
+# servers/mcp-jcl-parser-legacylens/pyproject.toml
+[project]
+name = "mcp-jcl-parser-legacylens"
+version = "0.1.0"
+description = "A lightweight MCP server that parses JCL using LegacyLens and emits cam.jcl.job / cam.jcl.step with pagination."
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+license = { text = "MIT" }
+authors = [{ name = "Astra Team" }]
+
+dependencies = [
+  # MCP SDK with FastMCP runner
+  "mcp>=1.1.0",
+
+  # Data / config
+  "pydantic>=2.8",
+  "pydantic-settings>=2.4",
+  "orjson>=3.10.7",
+  "pyyaml>=6.0.2",
+
+  # LegacyLens JCL parser (PyPI)
+  "legacylens-jcl-parser>=0.1.0",
+
+  # Utilities
+  "typing-extensions>=4.12.2",
+]
+
+[project.optional-dependencies]
+dev = [
+  "ruff>=0.6.0",
+  "mypy>=1.11.0",
+  "pytest>=8.3.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+select = ["E","F","I","UP","B"]
+fix = true
+
+[tool.mypy]
+python_version = "3.11"
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_unused_configs = true
+strict_optional = true
+no_implicit_optional = true
+check_untyped_defs = true
+disallow_untyped_defs = false
