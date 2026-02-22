@@ -7,7 +7,7 @@ import shlex
 import subprocess
 import time
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from ..settings import Settings
 
@@ -147,10 +147,14 @@ def _to_internal_obj_from_bridge(bridge_obj: dict, rel_file: str) -> dict:
     return obj
 
 
-def parse_program_with_proleap(cbl_path: str, cfg: Settings) -> Dict[str, Any]:
+def parse_program_with_proleap(cbl_path: str, cfg: Settings) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
     """
-    Invoke the ProLeap bridge and return a normalized JSON object ready for
-    normalize_program_obj(). STRICT: raises on any issue.
+    Invoke the ProLeap bridge and return a tuple:
+      (normalized_internal_obj, raw_bridge_json, telemetry)
+    - normalized_internal_obj → for normalize_program_obj()
+    - raw_bridge_json         → stored inside cam.cobol.ast_proleap.ast (verbatim)
+    - telemetry               → timings/counters for cam.cobol.parse_report
+    STRICT: raises on any issue.
     """
     cmd = _build_cmd(cbl_path, cfg)
 
@@ -187,49 +191,73 @@ def parse_program_with_proleap(cbl_path: str, cfg: Settings) -> Dict[str, Any]:
 
     json_text = _extract_json_line(stdout)
 
+    # Build telemetry scaffold early
+    telemetry: Dict[str, Any] = {
+        "timings_ms": {"parse": int(dt * 1000)},
+        "counters": {},
+        "messages": [],
+        "engine": _engine_from_env(),
+        "exit_code": proc.returncode,
+    }
+
     if proc.returncode != 0:
         if not json_text:
             logger.error(
                 "ProLeap non-zero exit (%s) in %.2fs.\n--- stdout(400) ---\n%s\n--- stderr(400) ---\n%s",
                 proc.returncode, dt, stdout[:400], stderr[:400]
             )
+            telemetry["messages"].append({"severity": "error", "message": "non-JSON output"})
             raise RuntimeError("ProLeap returned non-JSON output.")
         try:
-            raw = json.loads(json_text)
+            raw_bridge = json.loads(json_text)
         except Exception:
             logger.error(
                 "ProLeap non-zero exit (%s) + invalid JSON in %.2fs.\n--- stdout(400) ---\n%s\n--- stderr(400) ---\n%s",
                 proc.returncode, dt, stdout[:400], stderr[:400]
             )
+            telemetry["messages"].append({"severity": "error", "message": "invalid JSON"})
             raise RuntimeError("ProLeap returned invalid JSON.")
-        if raw.get("status") != "ok":
-            raise RuntimeError(_add_hints_to_error(str(raw.get("message", "unknown error"))))
-        return _to_internal_obj_from_bridge(raw, rel_file=cbl_path)
+        if raw_bridge.get("status") != "ok":
+            msg = _add_hints_to_error(str(raw_bridge.get("message", "unknown error")))
+            telemetry["messages"].append({"severity": "error", "message": msg})
+            raise RuntimeError(msg)
+        internal = _to_internal_obj_from_bridge(raw_bridge, rel_file=cbl_path)
+        # basic counters we can infer
+        telemetry["counters"]["paragraphs"] = len(internal.get("paragraphs") or [])
+        telemetry["counters"]["copybooks"] = len(internal.get("copybooks_used") or [])
+        return internal, raw_bridge, telemetry
 
     if not json_text:
         logger.error(
             "ProLeap returned non-JSON output in %.2fs.\n--- stdout(400) ---\n%s\n--- stderr(400) ---\n%s",
             dt, stdout[:400], stderr[:400]
         )
+        telemetry["messages"].append({"severity": "error", "message": "non-JSON output"})
         raise RuntimeError("ProLeap returned non-JSON output.")
     try:
-        raw = json.loads(json_text)
+        raw_bridge = json.loads(json_text)
     except Exception as e:
         logger.error(
             "ProLeap JSON parse failed in %.2fs.\n--- stdout(400) ---\n%s\n--- stderr(400) ---\n%s",
             dt, stdout[:400], stderr[:400]
         )
+        telemetry["messages"].append({"severity": "error", "message": "invalid JSON"})
         raise RuntimeError("ProLeap returned invalid JSON.") from e
 
     # Normalize bridge-specific shape to our internal shape
-    obj = _to_internal_obj_from_bridge(raw, rel_file=cbl_path)
+    internal = _to_internal_obj_from_bridge(raw_bridge, rel_file=cbl_path)
     logger.debug(
         "ProLeap ok in %.2fs for %s; engine=%s; program_id=%r; paras=%d; copybooks=%d",
         dt,
         cbl_path,
-        obj.get("engine"),
-        obj.get("program_id"),
-        len(obj.get("paragraphs") or []),
-        len(obj.get("copybooks_used") or []),
+        internal.get("engine"),
+        internal.get("program_id"),
+        len(internal.get("paragraphs") or []),
+        len(internal.get("copybooks_used") or []),
     )
-    return obj
+
+    # augment telemetry counters we can infer
+    telemetry["counters"]["paragraphs"] = len(internal.get("paragraphs") or [])
+    telemetry["counters"]["copybooks"] = len(internal.get("copybooks_used") or [])
+
+    return internal, raw_bridge, telemetry

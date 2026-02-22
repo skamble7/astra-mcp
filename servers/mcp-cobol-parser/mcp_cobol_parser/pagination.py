@@ -1,4 +1,4 @@
-# File: servers/mcp-cobol-parser/mcp_cobol_parser/pagination.py
+# servers/mcp-cobol-parser/mcp_cobol_parser/pagination.py
 from __future__ import annotations
 import base64, json
 from pydantic import BaseModel, Field
@@ -7,7 +7,9 @@ ORDER_KEY = "krelpath"
 
 class CursorV1(BaseModel):
     v: int = 1
-    kinds: list[str] = Field(default_factory=lambda: ["source_index", "copybook", "program"])
+    kinds: list[str] = Field(
+        default_factory=lambda: ["source_index", "copybook", "program", "ast_proleap", "asg_proleap", "parse_report"]
+    )
     offset: int = 0
     ps: int = 100
     run_id: str

@@ -56,7 +56,7 @@ services:
       ENABLE_REAL_LLM: "false"
       LLM_PROVIDER: OpenAI
       LLM_MODEL: gpt-4o-mini
-      OPENAI_API_KEY: <OPENAI_API_KEY>
+      OPENAI_API_KEY: <OpenAI_API_KEY>
     ports:
       - "${MERMAID_DIAGRAMMER_PORT:-8001}:8001"
   
@@ -80,12 +80,12 @@ services:
       SERVICE_NAME: mcp.workspace.doc.generator
 
       # --- LLM (OpenAI) ---
-      ENABLE_REAL_LLM: "true"     # set "false" for offline mode
+      ENABLE_REAL_LLM: "false"     # set "false" for offline mode
       LLM_PROVIDER: OpenAI
       LLM_MODEL: gpt-4o-mini
       LLM_TEMPERATURE: "0.2"
       LLM_MAX_TOKENS: "10000"
-      OPENAI_API_KEY: <OPENAI_API_KEY>
+      OPENAI_API_KEY: <OpenAI_API_KEY>
 
       # --- Services ---
       # Artifact service is in a separate compose; talk to the host-published port
@@ -121,6 +121,39 @@ services:
       - ${WORKSPACE_HOST_DIR:-../data/workspace}:/workspace
     extra_hosts:
       # Keep this for host-only services like the artifact service.
+      - "host.docker.internal:host-gateway"
+
+# --- NEW: Raina Input Fetcher MCP server ---
+  mcp-raina-input-fetcher:
+    build:
+      context: ../servers/raina-input-fetcher
+      dockerfile: Dockerfile
+    image: astra/mcp-raina-input-fetcher:local
+    container_name: mcp-raina-input-fetcher
+    restart: unless-stopped
+    environment:
+      # MCP transport
+      MCP_TRANSPORT: streamable-http
+      MCP_PORT: ${RAINA_INPUT_PORT:-8003}
+      MCP_MOUNT_PATH: /mcp
+
+      # Logging / service
+      SERVICE_NAME: mcp.raina.input.fetcher
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+
+      # HTTP client (for fetching the remote JSON)
+      HTTP_TIMEOUT_SECONDS: ${HTTP_TIMEOUT_SECONDS:-30}
+      HTTP_FOLLOW_REDIRECTS: "true"
+      # If your endpoint needs auth, set this or pass per-call "auth_bearer" param
+      DEFAULT_AUTH_BEARER: ${DEFAULT_AUTH_BEARER:-}
+
+      # Cosmetic defaults for returned artifact
+      ARTIFACT_NAME_PREFIX: ${ARTIFACT_NAME_PREFIX:-Raina Input}
+      ARTIFACT_TAGS: ${ARTIFACT_TAGS:-inputs,raina,discovery}
+    ports:
+      - "${RAINA_INPUT_PORT:-8003}:8003"
+    extra_hosts:
+      # Allows the container to reach services exposed on the host (e.g., your API that serves the input JSON)
       - "host.docker.internal:host-gateway"
   
   garage:

@@ -9,6 +9,7 @@ import uuid
 from typing import Any, Dict
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 from .tools.generate_document import generate_workspace_document
 from .models.params import GenerateParams
@@ -16,7 +17,25 @@ from .settings import Settings
 
 log = logging.getLogger(os.getenv("SERVICE_NAME", "mcp.workspace.doc.generator"))
 
-mcp = FastMCP("workspace-doc-generator")
+mcp = FastMCP(
+    "workspace-doc-generator",
+    transport_security=TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=[
+            "localhost:*",
+            "127.0.0.1:*",
+            "host.docker.internal:*",
+            # optional if you later call by service name inside a shared docker network:
+            "mcp-workspace-doc-generator:*",
+        ],
+        # origins matter mainly for browser-based clients; safe to include
+        allowed_origins=[
+            "http://localhost:*",
+            "http://127.0.0.1:*",
+            "http://host.docker.internal:*",
+        ],
+    ),
+)
 
 _JOBS: dict[str, dict[str, Any]] = {}
 

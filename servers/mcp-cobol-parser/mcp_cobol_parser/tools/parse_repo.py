@@ -19,30 +19,39 @@ from ..utils.fs import walk_index
 from ..models.cam_source_index import CamSourceIndex, SourceIndexFile
 from ..models.error_record import ErrorArtifact
 from ..parsers.cb2xml import parse_copybook_with_cb2xml
-from ..parsers.proleap import parse_program_with_proleap  # STRICT: real ProLeap only
+from ..parsers.proleap import parse_program_with_proleap  # now returns (internal, raw_bridge, telemetry)
 from ..parsers.normalize.copybook_normalizer import normalize_cb2xml_tree
 from ..parsers.normalize.program_normalizer import normalize_program_obj
 from ..utils.artifacts import ensure_enveloped_item  # ← guardrail
 
 logger = logging.getLogger("mcp.cobol.parse_repo")
 
-ORDER = ["source_index", "copybook", "program"]
+# default order (backward-compatible + new kinds)
+ORDER = ["source_index", "copybook", "program", "ast_proleap", "asg_proleap", "parse_report"]
 
 # Canonical kind_ids and schema versions for envelopes
 KIND_IDS = {
-    "source_index": "cam.asset.source_index",
-    "copybook": "cam.cobol.copybook",
-    "program": "cam.cobol.program",
-    "error": "cam.error",
+    "source_index":  "cam.asset.source_index",
+    "copybook":      "cam.cobol.copybook",
+    "program":       "cam.cobol.program",
+    "ast_proleap":   "cam.cobol.ast_proleap",
+    "asg_proleap":   "cam.cobol.asg_proleap",
+    "parse_report":  "cam.cobol.parse_report",
+    "error":         "cam.error",
 }
 SCHEMA_VERS = {
     "cam.asset.source_index": "1.0.0",
-    "cam.cobol.copybook": "1.0.0",
-    "cam.cobol.program": "1.0.0",
-    "cam.error": "1.0.0",
+    "cam.cobol.copybook":     "1.0.0",
+    "cam.cobol.program":      "1.0.0",
+    "cam.cobol.ast_proleap":  "1.0.0",
+    "cam.cobol.asg_proleap":  "1.0.0",
+    "cam.cobol.parse_report": "1.0.0",
+    "cam.error":              "1.0.0",
 }
 
-def _envelope(*, kind_id: str, key: str, data: Dict[str, Any], relpath: Optional[str], sha: Optional[str], cfg: Settings) -> Dict[str, Any]:
+# CHANGED: allow positional or keyword calls
+def _envelope(kind_id: str, key: str, data: Dict[str, Any],
+              relpath: Optional[str], sha: Optional[str], cfg: Settings) -> Dict[str, Any]:
     return {
         "kind_id": kind_id,
         "schema_version": SCHEMA_VERS.get(kind_id, "1.0.0"),
@@ -127,7 +136,7 @@ def register_tool(mcp: Any) -> None:
 
         files = src_index.files
         copy_files = [f for f in files if f.kind == "copybook" and ("copybook" in resolved_kinds)]
-        prog_files = [f for f in files if f.kind == "cobol" and ("program" in resolved_kinds)]
+        prog_files = [f for f in files if f.kind == "cobol" and any(k in resolved_kinds for k in ("program","ast_proleap","asg_proleap","parse_report"))]
 
         # Build catalog of envelope kinds to emit
         catalog: List[Dict[str, Any]] = []
@@ -138,9 +147,16 @@ def register_tool(mcp: Any) -> None:
             for f in sorted(copy_files, key=lambda x: x.relpath):
                 catalog.append({"kind_id": KIND_IDS["copybook"], "key": f.relpath, "sha": f.sha256})
 
-        if "program" in resolved_kinds:
-            for f in sorted(prog_files, key=lambda x: x.relpath):
+        # For each COBOL program file, we may emit up to 4 artifacts
+        for f in sorted(prog_files, key=lambda x: x.relpath):
+            if "program" in resolved_kinds:
                 catalog.append({"kind_id": KIND_IDS["program"], "key": f.relpath, "sha": f.sha256})
+            if "ast_proleap" in resolved_kinds:
+                catalog.append({"kind_id": KIND_IDS["ast_proleap"], "key": f.relpath, "sha": f.sha256})
+            if "asg_proleap" in resolved_kinds:
+                catalog.append({"kind_id": KIND_IDS["asg_proleap"], "key": f.relpath, "sha": f.sha256})
+            if "parse_report" in resolved_kinds:
+                catalog.append({"kind_id": KIND_IDS["parse_report"], "key": f.relpath, "sha": f.sha256})
 
         total = len(catalog)
 
@@ -168,12 +184,12 @@ def register_tool(mcp: Any) -> None:
                 name = os.path.splitext(os.path.basename(rel))[0].upper()
                 normalized = normalize_cb2xml_tree(tree, name=name, relpath=rel, sha256=sha).model_dump()
                 env = _envelope(
-                    kind_id=KIND_IDS["copybook"],
-                    key=rel,
-                    data=normalized,
-                    relpath=rel,
-                    sha=sha,
-                    cfg=cfg,
+                    KIND_IDS["copybook"],
+                    rel,
+                    normalized,
+                    rel,
+                    sha,
+                    cfg,
                 )
                 write_json(outp, env)
                 return ("copybook", rel, sha, None)
@@ -187,34 +203,135 @@ def register_tool(mcp: Any) -> None:
                 write_json(errp, env)
                 return ("error", rel, sha, str(e))
 
-        def work_prog(item: Dict[str, Any]):
-            rel = item["key"]
-            sha = item["sha"]
+        def work_prog_group(rel: str, sha: str):
+            """
+            Single parse for a COBOL file, then fan out:
+              - cam.cobol.program
+              - cam.cobol.ast_proleap
+              - cam.cobol.asg_proleap (derived minimal if needed)
+              - cam.cobol.parse_report
+            """
             src_abs = os.path.join(root, rel)
-            outp = artifact_path(cfg, run_id_val, sha, "program")
-            if exists(outp) and not input.force_reparse:
-                return ("program", rel, sha, None)
+
+            # Paths for each product
+            p_prog  = artifact_path(cfg, run_id_val, sha, "program")
+            p_ast   = artifact_path(cfg, run_id_val, sha, "ast_proleap")
+            p_asg   = artifact_path(cfg, run_id_val, sha, "asg_proleap")
+            p_prep  = artifact_path(cfg, run_id_val, sha, "parse_report")
+            p_err   = artifact_path(cfg, run_id_val, sha, "error")
+
+            # Skip if all already exist (unless force)
+            if (all(exists(p) for p in (p_prog, p_ast, p_asg, p_prep)) and not input.force_reparse):
+                return ("program-bundle", rel, sha, None)
+
             try:
-                obj = parse_program_with_proleap(src_abs, cfg)  # STRICT: raises on issues
-                normalized = normalize_program_obj(obj, relpath=rel, sha256=sha).model_dump()
-                env = _envelope(
-                    kind_id=KIND_IDS["program"],
-                    key=rel,
-                    data=normalized,
-                    relpath=rel,
-                    sha=sha,
-                    cfg=cfg,
+                internal, raw_bridge, telemetry = parse_program_with_proleap(src_abs, cfg)  # STRICT
+
+                # 1) cam.cobol.program (canonical)
+                normalized = normalize_program_obj(internal, relpath=rel, sha256=sha).model_dump()
+                env_prog = _envelope(
+                    KIND_IDS["program"],
+                    rel,
+                    normalized,
+                    rel,
+                    sha,
+                    cfg,
                 )
-                write_json(outp, env)
-                return ("program", rel, sha, None)
+                write_json(p_prog, env_prog)
+
+                # 2) cam.cobol.ast_proleap (verbatim bridge JSON into ast)
+                ast_payload = {
+                    "parser": {"name": "proleap", "version": cfg.PARSER_VERSION_PROLEAP},
+                    "source": {"relpath": rel, "sha256": sha},
+                    "ast": raw_bridge,  # store bridge JSON verbatim
+                    "stats": {
+                        "node_count": None,  # unknown from bridge; keep None
+                    },
+                    "issues": [],  # we treat bridge 'status=ok' as no issues
+                }
+                env_ast = _envelope(
+                    KIND_IDS["ast_proleap"],
+                    rel,
+                    ast_payload,
+                    rel,
+                    sha,
+                    cfg,
+                )
+                write_json(p_ast, env_ast)
+
+                # 3) cam.cobol.asg_proleap (derive minimal ASG from internal if needed)
+                #    Build a lightweight call graph + performs using the normalized internal object.
+                paras = internal.get("paragraphs") or []
+                calls = []
+                performs = []
+                nodes = set()
+                for p in paras:
+                    pname = (p.get("name") or "").upper()
+                    if pname:
+                        nodes.add(pname)
+                    for tgt in (p.get("performs") or []):
+                        t = (tgt or "").upper()
+                        if t:
+                            performs.append({"from": pname, "to": t})
+                            nodes.add(t)
+                    for c in (p.get("calls") or []):
+                        tgt = (c.get("target") or "").upper()
+                        if tgt:
+                            calls.append({"target": tgt, "dynamic": bool(c.get("dynamic"))})
+                            nodes.add(tgt)
+
+                asg_payload = {
+                    "parser": {"name": "proleap", "version": cfg.PARSER_VERSION_PROLEAP},
+                    "source": {"relpath": rel, "sha256": sha},
+                    "asg": {
+                        "program_id": internal.get("program_id"),
+                        "performs": performs,
+                        "calls": calls,
+                        "symbols": {},  # not available; keep empty
+                    },
+                    "call_graph": {
+                        "nodes": sorted(nodes),
+                        "edges": [[e["from"], e["to"]] for e in performs],
+                    },
+                    "issues": [],
+                }
+                env_asg = _envelope(
+                    KIND_IDS["asg_proleap"],
+                    rel,
+                    asg_payload,
+                    rel,
+                    sha,
+                    cfg,
+                )
+                write_json(p_asg, env_asg)
+
+                # 4) cam.cobol.parse_report (telemetry)
+                parse_report = {
+                    "parser": {"name": "proleap", "version": cfg.PARSER_VERSION_PROLEAP},
+                    "source": {"relpath": rel, "sha256": sha},
+                    "timings_ms": telemetry.get("timings_ms") or {},
+                    "counters": telemetry.get("counters") or {},
+                    "messages": telemetry.get("messages") or [],
+                }
+                env_prep = _envelope(
+                    KIND_IDS["parse_report"],
+                    rel,
+                    parse_report,
+                    rel,
+                    sha,
+                    cfg,
+                )
+                write_json(p_prep, env_prep)
+
+                return ("program-bundle", rel, sha, None)
+
             except Exception as e:
-                errp = artifact_path(cfg, run_id_val, sha, "error")
                 env = ErrorArtifact(
                     key=rel,
                     data={"phase": "program", "error": str(e)},
                     provenance={"producer": "mcp.cobol.parse_repo", "source": {"relpath": rel, "sha256": sha}},
                 ).model_dump()
-                write_json(errp, env)
+                write_json(p_err, env)
                 return ("error", rel, sha, str(e))
 
         # Ensure artifacts for THIS PAGE only
@@ -226,8 +343,16 @@ def register_tool(mcp: Any) -> None:
                     continue
                 if kid == KIND_IDS["copybook"]:
                     tasks.append(ex.submit(work_copy, it))
-                elif kid == KIND_IDS["program"]:
-                    tasks.append(ex.submit(work_prog, it))
+                elif kid in (KIND_IDS["program"], KIND_IDS["ast_proleap"], KIND_IDS["asg_proleap"], KIND_IDS["parse_report"]):
+                    # group parse per COBOL file (dedupe by relpath)
+                    # We key the group on relpath to run once.
+                    rel = it["key"]; sha = it["sha"]
+                    # Only submit once per relpath (simple dedupe: track a set locally)
+                    if not any(getattr(t, "_rel", None) == rel for t in tasks):
+                        fut = ex.submit(work_prog_group, rel, sha)
+                        setattr(fut, "_rel", rel)
+                        tasks.append(fut)
+
             for _ in as_completed(tasks):
                 pass
 
@@ -241,7 +366,10 @@ def register_tool(mcp: Any) -> None:
             "counts": {
                 "source_index": 1 if "source_index" in resolved_kinds else 0,
                 "copybook": len(copy_files) if "copybook" in resolved_kinds else 0,
-                "program": len(prog_files) if "program" in resolved_kinds else 0,
+                "program": sum(1 for f in prog_files) if "program" in resolved_kinds else 0,
+                "ast_proleap": sum(1 for f in prog_files) if "ast_proleap" in resolved_kinds else 0,
+                "asg_proleap": sum(1 for f in prog_files) if "asg_proleap" in resolved_kinds else 0,
+                "parse_report": sum(1 for f in prog_files) if "parse_report" in resolved_kinds else 0,
             },
         })
 
@@ -251,33 +379,37 @@ def register_tool(mcp: Any) -> None:
             kid = it["kind_id"]
             if kid == KIND_IDS["source_index"]:
                 env = _envelope(
-                    kind_id=kid,
-                    key="source-index",
-                    data=src_index.model_dump(),
-                    relpath=None,
-                    sha=None,
-                    cfg=cfg,
+                    KIND_IDS["source_index"],
+                    "source-index",
+                    src_index.model_dump(),
+                    None,
+                    None,
+                    cfg,
                 )
                 page.append(env)
                 continue
 
-            sha = it["sha"]
+            sha = it["sha"]; rel = it["key"]
+
+            def _maybe_append(token: str):
+                ap = artifact_path(cfg, run_id_val, sha, token)
+                if exists(ap):
+                    page.append(read_json(ap))
+                else:
+                    ep = artifact_path(cfg, run_id_val, sha, "error")
+                    if exists(ep):
+                        page.append(read_json(ep))
+
             if kid == KIND_IDS["copybook"]:
-                ap = artifact_path(cfg, run_id_val, sha, "copybook")
-                if exists(ap):
-                    page.append(read_json(ap))
-                else:
-                    ep = artifact_path(cfg, run_id_val, sha, "error")
-                    if exists(ep):
-                        page.append(read_json(ep))
+                _maybe_append("copybook")
             elif kid == KIND_IDS["program"]:
-                ap = artifact_path(cfg, run_id_val, sha, "program")
-                if exists(ap):
-                    page.append(read_json(ap))
-                else:
-                    ep = artifact_path(cfg, run_id_val, sha, "error")
-                    if exists(ep):
-                        page.append(read_json(ep))
+                _maybe_append("program")
+            elif kid == KIND_IDS["ast_proleap"]:
+                _maybe_append("ast_proleap")
+            elif kid == KIND_IDS["asg_proleap"]:
+                _maybe_append("asg_proleap")
+            elif kid == KIND_IDS["parse_report"]:
+                _maybe_append("parse_report")
 
         # FINAL GUARDRAIL: coerce any legacy/malformed entries into canonical envelope
         malformed = sum(1 for p in page if not (isinstance(p, dict) and "kind_id" in p and "data" in p))
@@ -321,7 +453,10 @@ def register_tool(mcp: Any) -> None:
                         "counts": {
                             "source_index": 1 if "source_index" in resolved_kinds else 0,
                             "copybook": len(copy_files) if "copybook" in resolved_kinds else 0,
-                            "program": len(prog_files) if "program" in resolved_kinds else 0,
+                            "program": sum(1 for f in prog_files) if "program" in resolved_kinds else 0,
+                            "ast_proleap": sum(1 for f in prog_files) if "ast_proleap" in resolved_kinds else 0,
+                            "asg_proleap": sum(1 for f in prog_files) if "asg_proleap" in resolved_kinds else 0,
+                            "parse_report": sum(1 for f in prog_files) if "parse_report" in resolved_kinds else 0,
                         },
                         "page_size": effective_page_size,
                     },
@@ -343,7 +478,10 @@ def register_tool(mcp: Any) -> None:
                 "counts": {
                     "source_index": 1 if "source_index" in resolved_kinds else 0,
                     "copybook": len(copy_files) if "copybook" in resolved_kinds else 0,
-                    "program": len(prog_files) if "program" in resolved_kinds else 0,
+                    "program": sum(1 for f in prog_files) if "program" in resolved_kinds else 0,
+                    "ast_proleap": sum(1 for f in prog_files) if "ast_proleap" in resolved_kinds else 0,
+                    "asg_proleap": sum(1 for f in prog_files) if "asg_proleap" in resolved_kinds else 0,
+                    "parse_report": sum(1 for f in prog_files) if "parse_report" in resolved_kinds else 0,
                 },
                 "page_size": effective_page_size,
             },

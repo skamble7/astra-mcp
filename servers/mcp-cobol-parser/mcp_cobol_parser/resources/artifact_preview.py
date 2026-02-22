@@ -10,15 +10,21 @@ log = logging.getLogger("mcp.cobol.artifact_preview")
 
 # short -> full kind_id mapping
 _VALID_KINDS = {
-    "copybook": "cam.cobol.copybook",
-    "program": "cam.cobol.program",
-    "error":   "cam.error",
+    "copybook":     "cam.cobol.copybook",
+    "program":      "cam.cobol.program",
+    "ast_proleap":  "cam.cobol.ast_proleap",
+    "asg_proleap":  "cam.cobol.asg_proleap",
+    "parse_report": "cam.cobol.parse_report",
+    "error":        "cam.error",
 }
 
 _DEFAULT_SCHEMA = {
-    "cam.cobol.copybook": "1.0.0",
-    "cam.cobol.program": "1.0.0",
-    "cam.error": "1.0.0",
+    "cam.cobol.copybook":     "1.0.0",
+    "cam.cobol.program":      "1.0.0",
+    "cam.cobol.ast_proleap":  "1.0.0",
+    "cam.cobol.asg_proleap":  "1.0.0",
+    "cam.cobol.parse_report": "1.0.0",
+    "cam.error":              "1.0.0",
 }
 
 def _paths_root_from_manifest(cfg: Settings, run_id: str) -> str:
@@ -106,7 +112,7 @@ def register_artifact_preview_resources(mcp: Any) -> None:
     @mcp.resource(
         uri="artifact://{run_id}/by-sha/{sha}.{kind}",
         name="Artifact (by sha)",
-        description="Returns an artifact envelope by its sha256 and kind (copybook|program|error).",
+        description="Returns an artifact envelope by its sha256 and kind (copybook|program|ast_proleap|asg_proleap|parse_report|error).",
         mime_type="application/json",
     )
     def read_artifact_by_sha(run_id: str, sha: str, kind: str) -> dict[str, Any]:
