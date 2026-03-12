@@ -4,7 +4,6 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
-import os
 from collections import Counter
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -347,51 +346,43 @@ def _protocol_preamble() -> str:
     )
 
 
+_polyllm_client: list = [None]
+_polyllm_lock: "asyncio.Lock | None" = None
+
+
+def _get_polyllm_lock() -> "asyncio.Lock":
+    import asyncio
+    global _polyllm_lock
+    if _polyllm_lock is None:
+        _polyllm_lock = asyncio.Lock()
+    return _polyllm_lock
+
+
 async def _llm_chat_strict_json(*, messages: List[Dict[str, str]], settings: Settings) -> str:
-    from openai import AsyncOpenAI, APIError, APITimeoutError, RateLimitError
-    import httpx
-    import asyncio as _asyncio
+    import asyncio
 
-    api_key = (os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_APIKEY") or "").strip()
-    if not api_key:
-        raise RuntimeError("OPENAI_API_KEY is not set")
+    lock = _get_polyllm_lock()
+    async with lock:
+        if _polyllm_client[0] is None:
+            from polyllm import RemoteConfigLoader
+            _polyllm_client[0] = await RemoteConfigLoader().load(settings.config_ref)
 
-    client = AsyncOpenAI(api_key=api_key, timeout=settings.llm_request_timeout)
-
-    req: Dict[str, Any] = {
-        "model": settings.llm_model,
-        "temperature": settings.temperature,
-        "messages": messages,
-    }
-
-    max_tokens_env = (os.getenv("LLM_MAX_TOKENS") or "").strip().lower()
-    if max_tokens_env not in {"", "0", "-1", "none", "null"}:
-        try:
-            req["max_tokens"] = int(max_tokens_env)
-        except Exception:
-            req["max_tokens"] = settings.max_tokens
-
+    client = _polyllm_client[0]
     backoff = settings.llm_retry_backoff_initial
     last_err: Exception | None = None
 
     for attempt in range(1, 1 + settings.llm_max_retries):
         try:
-            log.info("llm.call.begin model=%s msg_count=%s", settings.llm_model, len(messages))
-            resp = await client.chat.completions.create(**req)
-            out = (resp.choices[0].message.content or "").strip()
+            log.info("llm.call.begin msg_count=%s", len(messages))
+            result = await client.chat(messages)
+            out = (result.text or "").strip()
             log.info("llm.call.success output_len=%s", len(out))
             return out
-        except (APITimeoutError, httpx.ReadTimeout, httpx.ConnectTimeout) as e:
+        except Exception as e:
             last_err = e
-            log.warning("llm.timeout attempt=%s", attempt)
-        except (RateLimitError,) as e:
-            last_err = e
-            log.warning("llm.rate_limited attempt=%s", attempt)
-        except (APIError, httpx.HTTPError) as e:
-            last_err = e
-            log.warning("llm.api_error attempt=%s detail=%s", attempt, e)
+            log.warning("llm.call.error attempt=%s detail=%s", attempt, e)
 
-        await _asyncio.sleep(backoff)
+        await asyncio.sleep(backoff)
         backoff = min(backoff * 2.0, settings.llm_retry_backoff_max)
 
     raise last_err if last_err else RuntimeError("LLM call failed (retrieval mode)")
@@ -438,16 +429,16 @@ async def generate_workspace_document(params: GenerateParams) -> Dict[str, Any]:
     settings = Settings.from_env()
 
     log.info(
-        "gen.begin workspace_id=%s kind_id=%s llm_enabled=%s llm_model=%s artifact_service_url=%s",
+        "gen.begin workspace_id=%s kind_id=%s llm_enabled=%s config_ref=%s artifact_service_url=%s",
         params.workspace_id,
         params.kind_id,
         settings.enable_real_llm,
-        settings.llm_model,
+        settings.config_ref,
         settings.artifact_service_url,
     )
 
     if not settings.enable_real_llm:
-        raise RuntimeError("ENABLE_REAL_LLM is false; this server is prompt-driven and requires a live LLM.")
+        raise RuntimeError("LLM_CONFIG_REF is not set; this server requires a live LLM via ConfigForge.")
 
     # 1) Fetch workspace artifacts
     all_arts = await fetch_workspace_artifacts(params.workspace_id)
@@ -557,7 +548,11 @@ async def generate_workspace_document(params: GenerateParams) -> Dict[str, Any]:
         log.info("retrieval.turn.begin turn=%s seen=%s/%s", turn, len(seen_ids), len(all_set))
 
         llm_raw = await _llm_chat_strict_json(messages=messages, settings=settings)
-        llm_obj = _extract_last_json_object(llm_raw)
+        try:
+            llm_obj = _extract_last_json_object(llm_raw)
+        except ValueError:
+            log.error("llm.parse.failed turn=%s raw_prefix=%r", turn, llm_raw[:500])
+            raise
 
         # Always store assistant output for transcript continuity
         messages.append({"role": "assistant", "content": llm_raw})

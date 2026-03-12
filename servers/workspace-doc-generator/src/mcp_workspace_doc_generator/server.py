@@ -41,8 +41,7 @@ def _safe_cfg_snapshot(s: Settings) -> dict[str, Any]:
     return {
         "transport": os.getenv("MCP_TRANSPORT", "streamable-http"),
         "llm_enabled": s.enable_real_llm,
-        "llm_provider": s.llm_provider,
-        "llm_model": s.llm_model,
+        "config_ref": s.config_ref,
         "artifact_service_url": s.artifact_service_url,
         "s3_enabled": s.s3_enabled,
         "s3_endpoint_url": s.s3_endpoint_url,

@@ -80,13 +80,9 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       SERVICE_NAME: mcp.workspace.doc.generator
 
-      # --- LLM (OpenAI) ---
-      ENABLE_REAL_LLM: "true"     # set "false" for offline mode
-      LLM_PROVIDER: OpenAI
-      LLM_MODEL: gpt-4o-mini
-      LLM_TEMPERATURE: "0.2"
-      LLM_MAX_TOKENS: "10000"
-      OPENAI_API_KEY: <OpenAI_API_KEY>
+      # --- LLM (ConfigForge) ---
+      CONFIG_FORGE_URL: ${CONFIG_FORGE_URL:-http://host.docker.internal:8040}
+      LLM_CONFIG_REF: ${WORKSPACE_DOC_LLM_CONFIG_REF:-dev.llm.bedrock.explicit-creds}
 
       # --- Services ---
       # Artifact service is in a separate compose; talk to the host-published port

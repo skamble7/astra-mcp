@@ -7,7 +7,7 @@ ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
 
 # Install system deps
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl ca-certificates tini && rm -rf /var/lib/apt/lists/*
+    curl ca-certificates tini git && rm -rf /var/lib/apt/lists/*
 
 # ⬇️ Copy both pyproject + README first so build backend can read the readme
 COPY pyproject.toml README.md /app/

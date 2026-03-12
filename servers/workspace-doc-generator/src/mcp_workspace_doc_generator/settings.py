@@ -25,18 +25,18 @@ def _int_env(name: str, default: int) -> int:
 
 @dataclass
 class Settings:
-    # LLM
-    llm_provider: str = "none"
-    llm_model: str = "none"
-    temperature: float = 0.2
-    max_tokens: int = 1600
-    enable_real_llm: bool = False
+    # LLM — ConfigForge ref; empty = LLM disabled
+    config_ref: str = ""
 
-    # LLM networking/retry controls
+    # LLM networking/retry controls (applied in the generation loop)
     llm_request_timeout: float = 120.0
     llm_max_retries: int = 3
     llm_retry_backoff_initial: float = 0.75
     llm_retry_backoff_max: float = 8.0
+
+    @property
+    def enable_real_llm(self) -> bool:
+        return bool(self.config_ref)
 
     # Services
     artifact_service_url: str = "http://localhost:9020"
@@ -77,11 +77,7 @@ class Settings:
 
     @classmethod
     def from_env(cls) -> "Settings":
-        provider = os.getenv("LLM_PROVIDER", "none")
-        model = os.getenv("LLM_MODEL", "none")
-        temp = _float_env("LLM_TEMPERATURE", 0.2)
-        max_toks = _int_env("LLM_MAX_TOKENS", 1600)
-        enable = _truthy(os.getenv("ENABLE_REAL_LLM")) and provider.lower() == "openai" and model != "none"
+        config_ref = os.getenv("LLM_CONFIG_REF", "")
 
         llm_request_timeout = _float_env("LLM_TIMEOUT_SECONDS", 180.0)
         llm_max_retries = _int_env("LLM_MAX_RETRIES", 4)
@@ -119,11 +115,7 @@ class Settings:
         doc_auto_page_batch_size = _int_env("DOC_AUTO_PAGE_BATCH_SIZE", 8)
 
         return cls(
-            llm_provider=provider,
-            llm_model=model,
-            temperature=temp,
-            max_tokens=max_toks,
-            enable_real_llm=enable,
+            config_ref=config_ref,
             llm_request_timeout=llm_request_timeout,
             llm_max_retries=llm_max_retries,
             llm_retry_backoff_initial=llm_retry_backoff_initial,
