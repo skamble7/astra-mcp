@@ -25,10 +25,8 @@ mcp = FastMCP(
             "localhost:*",
             "127.0.0.1:*",
             "host.docker.internal:*",
-            # optional if you later call by service name inside a shared docker network:
             "mcp-workspace-doc-generator:*",
         ],
-        # origins matter mainly for browser-based clients; safe to include
         allowed_origins=[
             "http://localhost:*",
             "http://127.0.0.1:*",
@@ -60,7 +58,7 @@ async def _run_doc_job(job_id: str, args: dict[str, Any]) -> None:
     job["message"] = "Generating document…"
     try:
         params = GenerateParams(**args)
-        result = await generate_workspace_document(params)  # returns {"artifacts": [ ... ]}
+        result = await generate_workspace_document(params)
         job["status"] = "done"
         job["progress"] = 100.0
         job["message"] = "Document generated."
@@ -109,7 +107,6 @@ async def workspace_document_status(job_id: str) -> dict:
 async def tool_generate_workspace_document(workspace_id: str, kind_id: str) -> Dict[str, Any]:
     log.info(f"tool.call name=generate.workspace.document workspace_id={workspace_id} kind_id={kind_id}")
     params = GenerateParams(workspace_id=workspace_id, kind_id=kind_id)
-    # returns {"artifacts": [ ... ]} so the conductor can pick up artifacts directly
     return await generate_workspace_document(params)
 
 try:
