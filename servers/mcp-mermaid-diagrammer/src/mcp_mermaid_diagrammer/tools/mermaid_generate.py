@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+import asyncio
 import logging
-import os
 import time
 from typing import Any, Dict, Optional, List
 
@@ -12,7 +12,7 @@ from ..models.diagram_instance import DiagramInstanceLike
 from ..models.io_contracts import GenerateRequest, GenerateResponse
 from ..settings import Settings
 from ..engine.json_utils import minify_json
-from ..utils.logging import preview, redact_env, want_verbose_inputs
+from ..utils.logging import preview, want_verbose_inputs
 from ..engine.sanity import build_view_header, sanitize_mermaid
 
 log = logging.getLogger("mcp.mermaid.tools.generate")
@@ -88,45 +88,29 @@ def register_mermaid_generate(mcp: FastMCP) -> None:
     log.info("tool.register", extra={
         "tool": "diagram.mermaid.generate",
         "llm_enabled": settings.enable_real_llm,
-        "llm_provider": settings.llm_provider,
-        "llm_model": settings.llm_model,
-        "temperature": settings.temperature,
-        "max_tokens": settings.max_tokens,
+        "config_ref": settings.config_ref or "(none — dummy mode)",
     })
 
-    _provider = (settings.llm_provider or "").strip().lower()
-    _model = settings.llm_model
     _llm_call: Optional[Any] = None
 
-    # If LLM is enabled, prepare OpenAI client; otherwise we'll use dummy mode
-    if settings.enable_real_llm and _provider == "openai":
-        try:
-            from openai import AsyncOpenAI  # type: ignore
-            api_key = os.getenv("OPENAI_API_KEY")
-            if not api_key:
-                raise RuntimeError("OPENAI_API_KEY is not set")
-            client = AsyncOpenAI(api_key=api_key)
+    if settings.enable_real_llm:
+        # --- ConfigForge mode: lazy async init on first call ---
+        _cf_client: list = [None]
+        _cf_lock = asyncio.Lock()
 
-            async def _llm_call(system: str, user: str, temperature: float, max_tokens: int) -> str:
-                _ = redact_env(system), redact_env(user)
-                resp = await client.chat.completions.create(
-                    model=_model,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    messages=[
-                        {"role": "system", "content": system},
-                        {"role": "user", "content": user},
-                    ],
-                )
-                return (resp.choices[0].message.content or "").strip()
+        async def _llm_call(system: str, user: str, _temperature: float, _max_tokens: int) -> str:
+            async with _cf_lock:
+                if _cf_client[0] is None:
+                    from polyllm import RemoteConfigLoader
+                    _cf_client[0] = await RemoteConfigLoader().load(settings.config_ref)
+            result = await _cf_client[0].chat([
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ])
+            return result.text
 
-            log.info("tool.register.llm_ready", extra={"provider": "OpenAI"})
-        except Exception as e:
-            log.error("tool.register.llm_init_failed", extra={"error": str(e)})
-            _llm_call = None
-
-    if not settings.enable_real_llm:
-        log.info("tool.register.dummy_mode", extra={"reason": "ENABLE_REAL_LLM is false"})
+    else:
+        log.info("tool.register.dummy_mode", extra={"reason": "LLM_CONFIG_REF is not set"})
 
     @mcp.tool(name="diagram.mermaid.generate", title="Generate Mermaid Diagrams")
     async def diagram_mermaid_generate(
@@ -226,8 +210,8 @@ def register_mermaid_generate(mcp: FastMCP) -> None:
             diagrams_objs = await generate_diagrams_llm_only(
                 artifact=req.artifact,
                 views=req.views,
-                temperature=settings.temperature,
-                max_tokens=settings.max_tokens,
+                temperature=0.1,   # controlled by ConfigForge profile; value unused
+                max_tokens=1200,   # controlled by ConfigForge profile; value unused
                 llm_call=llm_with_prompt,
             )
             resp = GenerateResponse(diagrams=[d.model_dump() for d in diagrams_objs]).model_dump()

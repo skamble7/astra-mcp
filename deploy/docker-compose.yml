@@ -53,12 +53,13 @@ services:
       MCP_PORT: ${MERMAID_DIAGRAMMER_PORT:-8001}
       MCP_MOUNT_PATH: /mcp
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      ENABLE_REAL_LLM: "false"
-      LLM_PROVIDER: OpenAI
-      LLM_MODEL: gpt-4o-mini
-      OPENAI_API_KEY: <OpenAI_API_KEY>
+      # ConfigForge — LLM configuration
+      CONFIG_FORGE_URL: ${CONFIG_FORGE_URL:-http://host.docker.internal:8040}
+      LLM_CONFIG_REF: ${MERMAID_LLM_CONFIG_REF:-dev.llm.bedrock.explicit-creds}
     ports:
       - "${MERMAID_DIAGRAMMER_PORT:-8001}:8001"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
   
   mcp-workspace-doc-generator:
     build:
@@ -80,7 +81,7 @@ services:
       SERVICE_NAME: mcp.workspace.doc.generator
 
       # --- LLM (OpenAI) ---
-      ENABLE_REAL_LLM: "false"     # set "false" for offline mode
+      ENABLE_REAL_LLM: "true"     # set "false" for offline mode
       LLM_PROVIDER: OpenAI
       LLM_MODEL: gpt-4o-mini
       LLM_TEMPERATURE: "0.2"
@@ -112,6 +113,11 @@ services:
       # (Public website base is unused when S3_FORCE_SIGNED=true; kept here for clarity)
       S3_PUBLIC_BASE_URL: ""
       S3_PUBLIC_READ: "true"
+
+      DOC_MAX_TURNS: "15  "
+      DOC_REQUEST_MAX_ITEMS: "20"
+      DOC_SLICE_MAX_CHARS: "12000"
+      DOC_TOTAL_RETRIEVED_MAX_CHARS: "120000"
     ports:
       - "${WORKSPACE_DOC_PORT:-8002}:8002"
     volumes:
