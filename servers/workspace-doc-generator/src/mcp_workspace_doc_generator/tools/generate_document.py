@@ -64,6 +64,76 @@ def _extract_last_json_object(text: str) -> Dict[str, Any]:
     return last_obj
 
 
+def _recover_final_from_truncated_json(text: str) -> Optional[Dict[str, Any]]:
+    """
+    Recovery path when the LLM's JSON response is truncated by max_tokens.
+    Extracts the 'content' field value character-by-character, handling JSON
+    escape sequences, even if the closing braces were never generated.
+    Also extracts name/description/filename/tags from the pre-content preamble.
+    """
+    import re
+
+    content_match = re.search(r'"content"\s*:\s*"', text)
+    if not content_match:
+        return None
+
+    # Walk the JSON string byte-by-byte from the opening quote
+    start = content_match.end()
+    chars: List[str] = []
+    i = start
+    while i < len(text):
+        c = text[i]
+        if c == "\\" and i + 1 < len(text):
+            n = text[i + 1]
+            chars.append(
+                {"\"": '"', "n": "\n", "t": "\t", "r": "\r",
+                 "\\": "\\", "/": "/", "b": "\b", "f": "\f"}.get(n, n)
+            )
+            i += 2
+        elif c == '"':
+            break  # clean end of JSON string
+        else:
+            chars.append(c)
+            i += 1
+
+    content = "".join(chars).strip()
+    if not content:
+        return None
+
+    # Extract small metadata fields from the preamble (before "content":)
+    preamble = text[: content_match.start()]
+
+    def _str_field(field: str) -> str:
+        m = re.search(rf'"{re.escape(field)}"\s*:\s*"((?:[^"\\]|\\.)*)"', preamble)
+        if not m:
+            return ""
+        raw = m.group(1)
+        return (raw.replace('\\"', '"').replace("\\n", "\n")
+                .replace("\\t", "\t").replace("\\\\", "\\"))
+
+    tags: List[str] = []
+    tags_m = re.search(r'"tags"\s*:\s*(\[(?:[^\[\]]|\[.*?\])*?\])', preamble, re.DOTALL)
+    if tags_m:
+        try:
+            tags = json.loads(tags_m.group(1))
+        except Exception:
+            pass
+
+    log.info(
+        "llm.recovery.truncated_json content_chars=%s name=%r "
+        "— document was cut off by max_tokens; increase max_tokens in ConfigForge to avoid truncation",
+        len(content), _str_field("name"),
+    )
+    return {
+        "name": _str_field("name"),
+        "description": _str_field("description"),
+        "filename": _str_field("filename"),
+        "mime_type": _str_field("mime_type") or "text/markdown",
+        "tags": tags,
+        "content": content,
+    }
+
+
 def _pick_best_run_inputs_artifact(all_arts: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     candidates = [a for a in all_arts if a.get("kind") == RUN_INPUTS_KIND]
     if not candidates:
@@ -341,8 +411,24 @@ def _protocol_preamble() -> str:
         "- You may NOT produce final until you have been given slices for every artifact.\n"
         "- In final, `covered_artifact_ids` must match ALL artifact IDs exactly.\n"
         "- In final, `coverage_map` must contain an entry for every artifact_id.\n\n"
-        "Write artifact-driven guidance: extract specifics (services, events, rules, data stores, workflows, boundaries) from artifacts.\n"
-        "If something is missing, explicitly call it out as an open question tied to the artifact(s) you inspected.\n"
+        "DIAGRAM RULES:\n"
+        "- Each artifact slice may include a `diagrams` field containing pre-generated Mermaid diagrams.\n"
+        "- Each diagram has an `instructions` field containing valid Mermaid syntax.\n"
+        "- You MUST embed every diagram from every artifact into the final document as a fenced Mermaid code block:\n"
+        "  ```mermaid\n"
+        "  <instructions content here>\n"
+        "  ```\n"
+        "- Place each diagram immediately after the section that discusses the artifact it came from.\n"
+        "- Do NOT summarize or omit diagrams — embed the full diagram code verbatim.\n\n"
+        "CONTENT DEPTH RULES:\n"
+        "- Write FULL PARAGRAPHS for every section — not bullet lists, not one-line summaries.\n"
+        "- Each section must be at least 3-5 paragraphs of detailed prose covering the artifacts' specifics.\n"
+        "- Include exact field names, types, constraints, event payloads, API request/response shapes, and entity relationships — do NOT compress or abstract them.\n"
+        "- When describing a service: cover its responsibilities, every API endpoint (path, method, headers, request fields, response fields, error codes), every event it produces and consumes (with all payload fields), its data model (every entity with all fields), and its dependencies.\n"
+        "- When describing data models: write out every field with type, constraints, and business meaning in full sentences.\n"
+        "- When describing events: write out event name, producer, consumers, all payload fields and their types, and delivery guarantees.\n"
+        "- If something is missing from the artifacts, write an explicit open-question paragraph naming the artifact(s) and what is unclear.\n"
+        "- The document `content` field MUST be at least 6,000 words. Short responses are not acceptable.\n"
     )
 
 
@@ -356,6 +442,16 @@ def _get_polyllm_lock() -> "asyncio.Lock":
     if _polyllm_lock is None:
         _polyllm_lock = asyncio.Lock()
     return _polyllm_lock
+
+
+def _strip_code_fences(text: str) -> str:
+    """Strip markdown code fences (```json / ```) that Bedrock models add despite instructions."""
+    import re
+    text = text.strip()
+    # Handle ```json\n...\n``` and ```\n...\n```
+    text = re.sub(r"^```(?:json)?\s*\n?", "", text)
+    text = re.sub(r"\n?```\s*$", "", text)
+    return text.strip()
 
 
 async def _llm_chat_strict_json(*, messages: List[Dict[str, str]], settings: Settings) -> str:
@@ -375,7 +471,7 @@ async def _llm_chat_strict_json(*, messages: List[Dict[str, str]], settings: Set
         try:
             log.info("llm.call.begin msg_count=%s", len(messages))
             result = await client.chat(messages)
-            out = (result.text or "").strip()
+            out = _strip_code_fences(result.text or "")
             log.info("llm.call.success output_len=%s", len(out))
             return out
         except Exception as e:
@@ -422,6 +518,40 @@ def _validate_final(
         return False, "final_coverage_map_keys_mismatch"
 
     return True, "ok"
+
+
+def _inject_artifact_diagrams(md_content: str, all_arts: List[Dict[str, Any]]) -> str:
+    """
+    Collect Mermaid diagrams from artifact diagrams[].instructions and append them
+    to the document under an ## Artifact Diagrams section if not already present.
+    Diagrams the LLM already embedded verbatim are de-duplicated.
+    """
+    sections: List[str] = []
+    for art in all_arts:
+        diagrams = art.get("diagrams") or []
+        if not diagrams:
+            continue
+        art_name = art.get("name") or art.get("kind") or art.get("artifact_id", "unknown")
+        for d in diagrams:
+            instructions = (d.get("instructions") or "").strip()
+            if not instructions:
+                continue
+            # Skip if this diagram is already embedded in the document
+            if instructions in md_content:
+                continue
+            view = d.get("view") or "diagram"
+            sections.append(f"### {art_name} ({view})\n\n```mermaid\n{instructions}\n```")
+
+    if not sections:
+        return md_content
+
+    diagrams_block = "## Artifact Diagrams\n\n" + "\n\n".join(sections)
+
+    # Append before Appendices if present, otherwise at the end
+    appendix_marker = "\n## Appendices"
+    if appendix_marker in md_content:
+        return md_content.replace(appendix_marker, f"\n\n{diagrams_block}{appendix_marker}", 1)
+    return md_content + f"\n\n{diagrams_block}"
 
 
 # ------------------------------- main -------------------------------
@@ -499,6 +629,12 @@ async def generate_workspace_document(params: GenerateParams) -> Dict[str, Any]:
     all_set = {x for x in all_ids if isinstance(x, str) and x.strip()}
 
     dependencies_obj = {
+        "_retrieval_note": (
+            "INDEX ONLY — this section lists artifact IDs and kinds but does NOT contain artifact data or diagrams. "
+            "You MUST use the retrieval protocol (request slices via {\"requests\":[...]}) to obtain full artifact data "
+            "including diagrams before producing the final document. Do NOT generate the final document until you have "
+            "retrieved and reviewed slices for every artifact_id listed below."
+        ),
         "workspace_id": params.workspace_id,
         "artifact_count": len(all_arts),
         "artifact_index": artifact_index,
@@ -521,6 +657,7 @@ async def generate_workspace_document(params: GenerateParams) -> Dict[str, Any]:
     # 7) Retrieval conversation
     seen_ids: Set[str] = set()
     retrieved_chars_total = 0
+    all_retrieved_artifacts: List[Dict[str, Any]] = []  # accumulated across all turns for final call
 
     messages: List[Dict[str, str]] = [
         {"role": "system", "content": system_prompt},
@@ -546,6 +683,72 @@ async def generate_workspace_document(params: GenerateParams) -> Dict[str, Any]:
 
     for turn in range(1, settings.doc_max_turns + 1):
         log.info("retrieval.turn.begin turn=%s seen=%s/%s", turn, len(seen_ids), len(all_set))
+
+        # Once all artifacts are seen, make the final generation call using a compact
+        # 2-message context instead of the accumulated conversation history.
+        # This avoids sending 4-6 large messages (with redundant back-and-forth) to
+        # Bedrock's invoke_model endpoint, which causes read timeouts on large contexts.
+        if seen_ids == all_set and all_retrieved_artifacts:
+            log.info("retrieval.all_seen turn=%s — using compact context for final generation", turn)
+            final_messages = [
+                {"role": "system", "content": system_prompt},
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {
+                            "context": {
+                                "workspace": {"id": params.workspace_id},
+                                "kind_id": params.kind_id,
+                                "run_inputs_artifact_id": run_inputs_art.get("artifact_id"),
+                                "artifact_summary": {"total": len(all_arts), "kinds": dict(kind_counts)},
+                            },
+                            "all_retrieved_artifacts": all_retrieved_artifacts,
+                            "artifact_ids": sorted(list(seen_ids)),
+                            "instruction": (
+                                "All artifacts have been retrieved. Produce the final document now. "
+                                "Return {\"final\": {...}} with complete coverage of every artifact listed in artifact_ids. "
+                                "Write FULL PARAGRAPHS — not bullet points or one-line summaries. "
+                                "The content field must be at least 6,000 words."
+                            ),
+                        },
+                        ensure_ascii=False,
+                    ),
+                },
+            ]
+            llm_raw = await _llm_chat_strict_json(messages=final_messages, settings=settings)
+            try:
+                llm_obj = _extract_last_json_object(llm_raw)
+            except ValueError:
+                # JSON is truncated by max_tokens — try to recover content from the partial output
+                recovered = _recover_final_from_truncated_json(llm_raw)
+                if recovered and recovered.get("content"):
+                    llm_obj = {"final": recovered}
+                else:
+                    log.error("llm.parse.failed turn=%s raw_prefix=%r", turn, llm_raw[:500])
+                    raise
+
+            if isinstance(llm_obj, dict) and isinstance(llm_obj.get("final"), dict):
+                candidate = llm_obj["final"]
+                # Server-side: patch coverage fields so LLM ID-mismatch doesn't discard a
+                # valid document. We already verified seen_ids == all_set above.
+                if not isinstance(candidate.get("covered_artifact_ids"), list) or \
+                        set(candidate.get("covered_artifact_ids", [])) != set(all_ids):
+                    log.info("retrieval.compact.patching_coverage all_ids=%s", len(all_ids))
+                    candidate["covered_artifact_ids"] = list(all_ids)
+                if not isinstance(candidate.get("coverage_map"), dict):
+                    candidate["coverage_map"] = {
+                        aid: {"kind": next((a.get("kind", "") for a in all_arts if a.get("artifact_id") == aid), ""),
+                              "used_in_sections": ["document"], "key_points": []}
+                        for aid in all_ids
+                    }
+                ok, reason = _validate_final(final_obj=candidate, all_ids=all_ids, seen_ids=seen_ids)
+                if ok:
+                    final_obj = candidate
+                    break
+                # Only fall through if content itself is missing/empty
+                log.warning("retrieval.final.invalid reason=%s (content issue — NOT retrying with full history)", reason)
+                # Don't fall through to the full-history call; break with no final_obj
+                break
 
         llm_raw = await _llm_chat_strict_json(messages=messages, settings=settings)
         try:
@@ -614,6 +817,7 @@ async def generate_workspace_document(params: GenerateParams) -> Dict[str, Any]:
         )
         retrieved_chars_total += chars_used
         seen_ids |= newly_seen
+        all_retrieved_artifacts.extend(retrieved)  # accumulate for compact final call
 
         messages.append(
             {
@@ -636,17 +840,35 @@ async def generate_workspace_document(params: GenerateParams) -> Dict[str, Any]:
 
     # 8) Final metadata
     md_content = final_obj.get("content")
+    if isinstance(md_content, str):
+        word_count = len(md_content.split())
+        log.info("gen.content.stats chars=%s words=%s", len(md_content), word_count)
+        if word_count < 3000:
+            log.warning(
+                "gen.content.too_short words=%s — LLM produced compressed output. "
+                "Consider increasing max_tokens in the ConfigForge LLM profile (e.g. dev.llm.bedrock.explicit-creds).",
+                word_count,
+            )
     doc_name = final_obj.get("name") or (kind_def.get("title") or "Architecture Guidance")
     doc_desc = final_obj.get("description") or "Directive architecture guidance grounded on discovered artifacts."
     filename = final_obj.get("filename") or "architecture-guidance.md"
     mime_from_llm = final_obj.get("mime_type") or FALLBACK_MIME
     tags_from_llm = final_obj.get("tags") or ["architecture", "guidance"]
 
-    # 9) Enforce narratives_spec max length if present
+    # 8b) Enforce narratives_spec max length on LLM prose BEFORE diagram injection.
+    # Applying the limit after injection causes diagrams to eat the prose budget.
     narratives = latest.get("narratives_spec") or {}
     max_chars = narratives.get("max_length_chars")
     if isinstance(max_chars, int) and max_chars > 0 and isinstance(md_content, str) and len(md_content) > max_chars:
+        log.warning(
+            "gen.prose.truncated limit=%s actual=%s (truncation applied before diagram injection)",
+            max_chars, len(md_content),
+        )
         md_content = md_content[:max_chars]
+
+    # 8c) Programmatically inject artifact diagrams (appended after prose, not subject to char limit)
+    if isinstance(md_content, str):
+        md_content = _inject_artifact_diagrams(md_content, all_arts)
 
     # 10) Write file
     out_dir = ensure_output_dir()
