@@ -20,16 +20,16 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 def _load_schema() -> Dict[str, Any]:
-    here = Path(__file__).resolve().parent.parent / "artifact_kinds" / "cam.inputs.raina.json"
+    here = Path(__file__).resolve().parent.parent / "artifact_kinds" / "cam.asset.raina_input.json"
     spec = json.loads(here.read_text(encoding="utf-8"))
     versions = spec.get("schema_versions") or []
     latest = spec.get("latest_schema_version")
     if not versions:
-        raise RuntimeError("cam.inputs.raina schema missing schema_versions")
+        raise RuntimeError("cam.asset.raina_input schema missing schema_versions")
     entry = next((v for v in versions if v.get("version") == latest), versions[0])
     schema = entry.get("json_schema")
     if not isinstance(schema, dict):
-        raise RuntimeError("cam.inputs.raina schema missing json_schema")
+        raise RuntimeError("cam.asset.raina_input schema missing json_schema")
     return schema
 
 _VALIDATOR = Draft202012Validator(_load_schema())
@@ -84,13 +84,13 @@ def build_artifact(validated: Dict[str, Any], *, name: str | None, settings: Set
 
     now = _now_iso()
     return {
-        "kind_id": "cam.inputs.raina",
+        "kind_id": "cam.asset.raina_input",
         "name": title,
         "data": validated,  # <- strictly: { inputs: { avc, fss, pss } }
         "preview": {"text_excerpt": domain[:240] if isinstance(domain, str) else None},
         "mime_type": "application/json",
         "encoding": "utf-8",
-        "tags": settings.artifact_tags or ["inputs", "raina", "discovery"],
+        "tags": settings.artifact_tags or ["asset", "raina", "discovery"],
         "created_at": now,
         "updated_at": now,
     }

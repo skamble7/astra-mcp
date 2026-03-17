@@ -17,29 +17,29 @@ services:
     volumes:
       - ${WORKSPACE_HOST_DIR:-../data/workspace}:/workspace
 
-  mcp-cobol-parser:
-    build:
-      context: ../servers/mcp-cobol-parser
-      dockerfile: Dockerfile
-    image: astra/mcp-cobol-parser:local
-    container_name: mcp-cobol-parser
-    restart: unless-stopped
-    environment:
-      # MCP runner config
-      MCP_TRANSPORT: streamable-http
-      MCP_PORT: ${COBOL_PARSER_PORT:-8765}
-      MCP_MOUNT_PATH: /mcp
+  # mcp-cobol-parser:
+  #   build:
+  #     context: ../servers/mcp-cobol-parser
+  #     dockerfile: Dockerfile
+  #   image: astra/mcp-cobol-parser:local
+  #   container_name: mcp-cobol-parser
+  #   restart: unless-stopped
+  #   environment:
+  #     # MCP runner config
+  #     MCP_TRANSPORT: streamable-http
+  #     MCP_PORT: ${COBOL_PARSER_PORT:-8765}
+  #     MCP_MOUNT_PATH: /mcp
 
-      # service config
-      PAGE_SIZE: 100
-      MAX_PAGE_SIZE: 500
-      WORKERS: 8
-      CACHE_DIR: /app/.cache
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-    ports:
-      - "${COBOL_PARSER_PORT:-8765}:8765"
-    volumes:
-      - ${WORKSPACE_HOST_DIR:-../data/workspace}:/workspace
+  #     # service config
+  #     PAGE_SIZE: 100
+  #     MAX_PAGE_SIZE: 500
+  #     WORKERS: 8
+  #     CACHE_DIR: /app/.cache
+  #     LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  #   ports:
+  #     - "${COBOL_PARSER_PORT:-8765}:8765"
+  #   volumes:
+  #     - ${WORKSPACE_HOST_DIR:-../data/workspace}:/workspace
 
   mcp-mermaid-diagrammer:
     build:

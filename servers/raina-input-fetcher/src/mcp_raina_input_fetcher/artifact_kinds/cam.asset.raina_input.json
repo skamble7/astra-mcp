@@ -1,8 +1,8 @@
 {
-  "_id": "cam.inputs.raina",
+  "_id": "cam.asset.raina_input",
   "title": "Raina Input (AVC/FSS/PSS)",
-  "category": "inputs",
-  "aliases": ["cam.raina.input", "cam.discovery.raina"],
+  "category": "asset",
+  "aliases": ["cam.inputs.raina", "cam.raina.input", "cam.discovery.raina"],
   "status": "active",
   "latest_schema_version": "1.0.0",
   "schema_versions": [
