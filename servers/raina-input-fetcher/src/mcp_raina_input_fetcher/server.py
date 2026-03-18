@@ -15,12 +15,12 @@ log = logging.getLogger(os.getenv("SERVICE_NAME", "mcp.raina.input.fetcher"))
 mcp = FastMCP("raina-input-fetcher")
 
 @mcp.tool(name="raina.input.fetch", title="Fetch Raina Input (AVC/FSS/PSS) from URL")
-async def raina_input_fetch(url: str, name: str | None = None, auth_bearer: str | None = None) -> Dict[str, Any]:
+async def raina_input_fetch(stories_url: str, name: str | None = None, auth_bearer: str | None = None) -> Dict[str, Any]:
     """
-    Fetches a Raina input JSON from `url`, validates it against cam.asset.raina_input, and returns an artifact.
+    Fetches a Raina input JSON from `stories_url`, validates it against cam.asset.raina_input, and returns an artifact.
     """
     settings = Settings.from_env()
-    params = FetchParams(url=url, name=name, auth_bearer=auth_bearer)
+    params = FetchParams(url=stories_url, name=name, auth_bearer=auth_bearer)
     validated = await fetch_and_validate(params, settings)
     artifact = build_artifact(validated, name=params.name, settings=settings)
     # Wrap for conductor (expects `artifacts` top-level)
