@@ -1,7 +1,7 @@
 [project]
 name = "mcp-raina-input-fetcher"
 version = "0.1.0"
-description = "MCP server that fetches Raina AVC/FSS/PSS input JSON from a URL and returns a cam.inputs.raina artifact."
+description = "MCP server that fetches and validates Raina AVC/FSS/PSS input JSON from a URL."
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [{ name = "Astra Team" }]

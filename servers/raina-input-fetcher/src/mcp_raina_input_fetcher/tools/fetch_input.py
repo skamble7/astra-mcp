@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
 
@@ -16,28 +15,20 @@ from ..settings import Settings
 
 log = logging.getLogger("mcp.raina.input.fetch")
 
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
 def _load_schema() -> Dict[str, Any]:
-    here = Path(__file__).resolve().parent.parent / "artifact_kinds" / "cam.asset.raina_input.json"
-    spec = json.loads(here.read_text(encoding="utf-8"))
-    versions = spec.get("schema_versions") or []
-    latest = spec.get("latest_schema_version")
-    if not versions:
-        raise RuntimeError("cam.asset.raina_input schema missing schema_versions")
-    entry = next((v for v in versions if v.get("version") == latest), versions[0])
-    schema = entry.get("json_schema")
+    schema_path = Path(__file__).resolve().parent.parent / "schemas" / "raina_input.json"
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
     if not isinstance(schema, dict):
-        raise RuntimeError("cam.asset.raina_input schema missing json_schema")
+        raise RuntimeError("raina_input.json is not a valid JSON Schema object")
     return schema
 
 _VALIDATOR = Draft202012Validator(_load_schema())
 
+
 async def fetch_and_validate(params: FetchParams, settings: Settings) -> Dict[str, Any]:
     """
-    Fetches the remote JSON, validates strictly against cam.inputs.raina JSON Schema,
-    also parses into Pydantic models. Returns the validated JSON object.
+    Fetches the Raina input JSON from the given URL, validates it against the
+    raina_input JSON Schema, and returns the validated data as-is.
     """
     headers: dict[str, str] = {"accept": "application/json"}
     bearer = (params.auth_bearer or settings.default_auth_bearer or "").strip()
@@ -46,7 +37,7 @@ async def fetch_and_validate(params: FetchParams, settings: Settings) -> Dict[st
 
     timeout = httpx.Timeout(settings.http_timeout_seconds)
     async with httpx.AsyncClient(follow_redirects=settings.http_follow_redirects, timeout=timeout) as client:
-        log.info(f"http.get url={params.url}")
+        log.info("http.get url=%s", params.url)
         resp = await client.get(str(params.url), headers=headers)
         resp.raise_for_status()
         try:
@@ -54,43 +45,19 @@ async def fetch_and_validate(params: FetchParams, settings: Settings) -> Dict[st
         except Exception as e:
             raise RuntimeError(f"Endpoint did not return valid JSON: {e}") from e
 
-    # JSON Schema validation (strict)
+    # JSON Schema validation
     errors = sorted(_VALIDATOR.iter_errors(data), key=lambda e: e.path)
     if errors:
-        # Build a compact error summary
         msgs = []
         for err in errors[:25]:
             loc = "/".join([str(p) for p in err.path]) or "<root>"
             msgs.append(f"{loc}: {err.message}")
         raise RuntimeError("Schema validation failed:\n- " + "\n- ".join(msgs))
 
-    # Pydantic model validation (type-safety + useful errors)
+    # Pydantic model validation (type-safety)
     try:
         RainaInputDoc.model_validate(data)
     except ValidationError as e:
         raise RuntimeError(f"Pydantic validation failed: {e}") from e
 
     return data
-
-def build_artifact(validated: Dict[str, Any], *, name: str | None, settings: Settings) -> Dict[str, Any]:
-    # Title / name
-    domain = (
-        validated.get("inputs", {})
-        .get("avc", {})
-        .get("context", {})
-        .get("domain", "")
-    )
-    title = name or f"{settings.artifact_name_prefix} ({domain or 'Unknown Domain'})"
-
-    now = _now_iso()
-    return {
-        "kind_id": "cam.asset.raina_input",
-        "name": title,
-        "data": validated,  # <- strictly: { inputs: { avc, fss, pss } }
-        "preview": {"text_excerpt": domain[:240] if isinstance(domain, str) else None},
-        "mime_type": "application/json",
-        "encoding": "utf-8",
-        "tags": settings.artifact_tags or ["asset", "raina", "discovery"],
-        "created_at": now,
-        "updated_at": now,
-    }

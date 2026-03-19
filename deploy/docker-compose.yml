@@ -148,10 +148,6 @@ services:
       HTTP_FOLLOW_REDIRECTS: "true"
       # If your endpoint needs auth, set this or pass per-call "auth_bearer" param
       DEFAULT_AUTH_BEARER: ${DEFAULT_AUTH_BEARER:-}
-
-      # Cosmetic defaults for returned artifact
-      ARTIFACT_NAME_PREFIX: ${ARTIFACT_NAME_PREFIX:-Raina Input}
-      ARTIFACT_TAGS: ${ARTIFACT_TAGS:-inputs,raina,discovery}
     ports:
       - "${RAINA_INPUT_PORT:-8003}:8003"
     extra_hosts:

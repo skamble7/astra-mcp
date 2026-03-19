@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Raina Input",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["inputs"],
+  "properties": {
+    "inputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["avc", "fss", "pss"],
+      "properties": {
+        "avc": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "vision",
+            "problem_statements",
+            "goals",
+            "non_functionals",
+            "constraints",
+            "assumptions",
+            "context",
+            "success_criteria"
+          ],
+          "properties": {
+            "vision": { "type": "array", "items": { "type": "string" }, "default": [] },
+            "problem_statements": { "type": "array", "items": { "type": "string" }, "default": [] },
+            "goals": {
+              "type": "array",
+              "default": [],
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["id", "text"],
+                "properties": {
+                  "id": { "type": "string", "minLength": 1 },
+                  "text": { "type": "string", "minLength": 1 },
+                  "metric": { "type": ["string", "null"] }
+                }
+              }
+            },
+            "non_functionals": {
+              "type": "array",
+              "default": [],
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["type", "target"],
+                "properties": {
+                  "type": { "type": "string", "minLength": 1 },
+                  "target": { "type": "string", "minLength": 1 }
+                }
+              }
+            },
+            "constraints": { "type": "array", "items": { "type": "string" }, "default": [] },
+            "assumptions": { "type": "array", "items": { "type": "string" }, "default": [] },
+            "context": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["domain", "actors"],
+              "properties": {
+                "domain": { "type": "string" },
+                "actors": { "type": "array", "items": { "type": "string" }, "default": [] }
+              }
+            },
+            "success_criteria": {
+              "type": "array",
+              "default": [],
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["kpi", "target"],
+                "properties": {
+                  "kpi": { "type": "string", "minLength": 1 },
+                  "target": { "type": "string", "minLength": 1 }
+                }
+              }
+            }
+          }
+        },
+        "fss": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["stories"],
+          "properties": {
+            "stories": {
+              "type": "array",
+              "default": [],
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["key", "title"],
+                "properties": {
+                  "key": { "type": "string", "minLength": 1 },
+                  "title": { "type": "string", "minLength": 1 },
+                  "description": {
+                    "oneOf": [
+                      { "type": "string" },
+                      { "type": "array", "items": { "type": "string" } },
+                      { "type": "null" }
+                    ]
+                  },
+                  "acceptance_criteria": { "type": "array", "items": { "type": "string" }, "default": [] },
+                  "tags": { "type": "array", "items": { "type": "string" }, "default": [] }
+                }
+              }
+            }
+          }
+        },
+        "pss": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["paradigm", "style", "tech_stack"],
+          "properties": {
+            "paradigm": { "type": "string", "minLength": 1 },
+            "style": { "type": "array", "items": { "type": "string" }, "default": [] },
+            "tech_stack": { "type": "array", "items": { "type": "string" }, "default": [] }
+          }
+        }
+      }
+    }
+  }
+}
