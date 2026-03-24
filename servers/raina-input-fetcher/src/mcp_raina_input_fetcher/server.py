@@ -8,23 +8,28 @@ from typing import Any, Dict
 from mcp.server.fastmcp import FastMCP
 
 from .models.params import FetchParams
+from .models.raina_input import RainaInputDoc
 from .settings import Settings
-from .tools.fetch_input import fetch_and_validate, build_artifact
+from .tools.fetch_input import fetch_and_validate
 
 log = logging.getLogger(os.getenv("SERVICE_NAME", "mcp.raina.input.fetcher"))
 mcp = FastMCP("raina-input-fetcher")
 
+
 @mcp.tool(name="raina.input.fetch", title="Fetch Raina Input (AVC/FSS/PSS) from URL")
-async def raina_input_fetch(url: str, name: str | None = None, auth_bearer: str | None = None) -> Dict[str, Any]:
+async def raina_input_fetch(stories_url: str, auth_bearer: str | None = None) -> RainaInputDoc:
     """
-    Fetches a Raina input JSON from `url`, validates it against cam.asset.raina_input, and returns an artifact.
+    Fetches a Raina input JSON from `stories_url`, validates it against the
+    raina_input schema (AVC/FSS/PSS structure), and returns the validated document.
+
+    Returns an object with shape:
+      { "inputs": { "avc": {...}, "fss": { "stories": [...] }, "pss": {...} } }
     """
     settings = Settings.from_env()
-    params = FetchParams(url=url, name=name, auth_bearer=auth_bearer)
-    validated = await fetch_and_validate(params, settings)
-    artifact = build_artifact(validated, name=params.name, settings=settings)
-    # Wrap for conductor (expects `artifacts` top-level)
-    return {"artifacts": [artifact]}
+    params = FetchParams(url=stories_url, auth_bearer=auth_bearer)
+    data = await fetch_and_validate(params, settings)
+    return RainaInputDoc.model_validate(data)
+
 
 try:
     @mcp.on_startup  # type: ignore[attr-defined]
@@ -34,7 +39,6 @@ try:
             "transport": os.getenv("MCP_TRANSPORT", "stdio"),
             "timeout": s.http_timeout_seconds,
             "redirects": s.http_follow_redirects,
-            "artifact_name_prefix": s.artifact_name_prefix,
         }
         log.info("Raina Input Fetcher started cfg=%s", json.dumps(cfg, ensure_ascii=False))
 except Exception:
