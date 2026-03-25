@@ -14,24 +14,20 @@ from mcp.server.transport_security import TransportSecuritySettings
 from .tools.generate_document import generate_workspace_document
 from .models.params import GenerateParams
 from .settings import Settings
+from mcp.server.transport_security import TransportSecuritySettings
 
 log = logging.getLogger(os.getenv("SERVICE_NAME", "mcp.workspace.doc.generator"))
 
+allowed_hosts = os.getenv("ALLOWED_HOSTS", "localhost:*,127.0.0.1:*,host.docker.internal:*,*").split(",")
+allowed_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:*,http://127.0.0.1:*,http://host.docker.internal:*,*").split(",")
+
+# Single FastMCP instance
 mcp = FastMCP(
-    "workspace-doc-generator",
+    "mcp.mermaid.server",
     transport_security=TransportSecuritySettings(
-        enable_dns_rebinding_protection=True,
-        allowed_hosts=[
-            "localhost:*",
-            "127.0.0.1:*",
-            "host.docker.internal:*",
-            "mcp-workspace-doc-generator:*",
-        ],
-        allowed_origins=[
-            "http://localhost:*",
-            "http://127.0.0.1:*",
-            "http://host.docker.internal:*",
-        ],
+        enable_dns_rebinding_protection=False,
+        allowed_hosts=allowed_hosts,
+        allowed_origins=allowed_origins,
     ),
 )
 

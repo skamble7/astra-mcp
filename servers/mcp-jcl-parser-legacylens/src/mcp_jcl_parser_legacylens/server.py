@@ -9,11 +9,22 @@ from .tools.parse_repo import register_tool
 from .resources.run_info import register_run_info_resources
 from .resources.file_preview import register_file_preview_resources
 from .resources.artifact_preview import register_artifact_preview_resources
+from mcp.server.transport_security import TransportSecuritySettings
 
 logger = logging.getLogger("mcp.jcl.server")
 
+allowed_hosts = os.getenv("ALLOWED_HOSTS", "localhost:*,127.0.0.1:*,host.docker.internal:*,*").split(",")
+allowed_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:*,http://127.0.0.1:*,http://host.docker.internal:*,*").split(",")
+
 # Single FastMCP instance
-mcp = FastMCP("mcp.jcl.parser.legacylens")
+mcp = FastMCP(
+    "mcp.mermaid.server",
+    transport_security=TransportSecuritySettings(
+        enable_dns_rebinding_protection=False,
+        allowed_hosts=allowed_hosts,
+        allowed_origins=allowed_origins,
+    ),
+)
 
 # Register tools & resources
 register_tool(mcp)

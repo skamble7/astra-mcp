@@ -11,9 +11,21 @@ from .models.params import FetchParams
 from .models.raina_input import RainaInputDoc
 from .settings import Settings
 from .tools.fetch_input import fetch_and_validate
+from mcp.server.transport_security import TransportSecuritySettings
 
 log = logging.getLogger(os.getenv("SERVICE_NAME", "mcp.raina.input.fetcher"))
-mcp = FastMCP("raina-input-fetcher")
+allowed_hosts = os.getenv("ALLOWED_HOSTS", "localhost:*,127.0.0.1:*,host.docker.internal:*,*").split(",")
+allowed_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:*,http://127.0.0.1:*,http://host.docker.internal:*,*").split(",")
+
+# Single FastMCP instance
+mcp = FastMCP(
+    "mcp.mermaid.server",
+    transport_security=TransportSecuritySettings(
+        enable_dns_rebinding_protection=False,
+        allowed_hosts=allowed_hosts,
+        allowed_origins=allowed_origins,
+    ),
+)
 
 
 @mcp.tool(name="raina.input.fetch", title="Fetch Raina Input (AVC/FSS/PSS) from URL")
