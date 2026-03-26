@@ -1,0 +1,70 @@
+# arch_styles/microservices/config.yaml
+#
+# Configuration for the Microservices Architecture Guidance document style.
+# Edit this file to change output metadata, artifact dependencies, or document structure.
+# No code changes required.
+
+output_kind: cam.governance.microservices_arch_guidance
+output_filename: microservices-architecture-guidance.md
+output_mime_type: text/markdown
+
+# Default name/description for the generated document
+doc_name: Microservices Architecture Guidance
+doc_description: >-
+  Directive microservices architecture guidance grounded on discovered workspace artifacts
+  and Raina input requirements.
+
+# Run-inputs artifact kind — the AVC/FSS/PSS source artifact
+run_inputs_kind: cam.asset.raina_input
+
+# Artifact representation paths fetched during LLM retrieval.
+# "narratives" = LLM-generated prose summaries (token-efficient; preferred over raw "data").
+# "diagrams"   = Mermaid diagram code (always include).
+# "data"       = raw JSON (verbose; redundant when narratives are present — omit by default).
+auto_page_paths:
+  - narratives
+  - diagrams
+
+# Prose length limit in characters. Set to 0 to disable.
+# Diagrams are appended after this limit and are not counted.
+# 50 000 is the narratives_spec limit but the document is stored in S3 so we
+# raise it here to avoid mid-sentence truncation.
+max_prose_chars: 300000
+
+# Tags applied to the generated artifact
+tags:
+  - architecture
+  - guidance
+  - microservices
+
+# Hard-dependency artifact kinds — all must be present in the workspace.
+# These are fetched and alias-resolved before document generation.
+depends_on:
+  hard:
+    - cam.asset.raina_input
+    - cam.domain.ubiquitous_language
+    - cam.domain.bounded_context_map
+    - cam.catalog.microservice_inventory
+    - cam.contract.service_api
+    - cam.catalog.events
+    - cam.architecture.service_interaction_matrix
+    - cam.data.service_data_ownership
+    - cam.architecture.integration_patterns
+    - cam.security.microservices_security_architecture
+    - cam.observability.microservices_observability_spec
+    - cam.deployment.microservices_topology
+    - cam.catalog.tech_stack_rankings
+    - cam.architecture.microservices_architecture
+    - cam.deployment.microservices_migration_plan
+  soft: []
+
+# Related asset IDs that will be linked in the output artifact metadata
+related_assets:
+  - id: cam.architecture.microservices_architecture
+    relation: grounds
+  - id: cam.catalog.microservice_inventory
+    relation: cites
+  - id: cam.architecture.service_interaction_matrix
+    relation: cites
+  - id: cam.deployment.microservices_migration_plan
+    relation: drives

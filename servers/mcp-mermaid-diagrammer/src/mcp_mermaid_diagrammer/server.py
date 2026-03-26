@@ -3,6 +3,7 @@ import logging
 from mcp.server.fastmcp import FastMCP
 from .tools import register as register_tools
 from mcp.server.transport_security import TransportSecuritySettings
+import os
 
 logger = logging.getLogger("mcp.mermaid.server")
 
