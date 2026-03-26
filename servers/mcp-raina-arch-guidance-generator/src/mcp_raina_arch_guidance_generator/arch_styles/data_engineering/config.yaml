@@ -1,0 +1,74 @@
+# arch_styles/data_engineering/config.yaml
+#
+# Configuration for the Data Pipeline Architecture Guidance document style.
+# Edit this file to change output metadata, artifact dependencies, or document structure.
+# No code changes required.
+
+output_kind: cam.governance.data_pipeline_arch_guidance
+output_filename: data-pipeline-architecture-guidance.md
+output_mime_type: text/markdown
+
+# Default name/description for the generated document
+doc_name: Data Pipeline Architecture Guidance
+doc_description: >-
+  Directive data pipeline architecture guidance grounded on discovered workspace artifacts
+  and Raina input requirements.
+
+# Run-inputs artifact kind — the AVC/FSS/PSS source artifact
+run_inputs_kind: cam.asset.raina_input
+
+# Artifact representation paths fetched during LLM retrieval.
+# "narratives" = LLM-generated prose summaries (token-efficient; preferred over raw "data").
+# "diagrams"   = Mermaid diagram code (always include).
+# "data"       = raw JSON (verbose; redundant when narratives are present — omit by default).
+auto_page_paths:
+  - narratives
+  - diagrams
+
+# Prose length limit in characters. Set to 0 to disable.
+# Diagrams are appended after this limit and are not counted.
+max_prose_chars: 300000
+
+# Tags applied to the generated artifact
+tags:
+  - architecture
+  - guidance
+  - data-pipeline
+
+# Hard-dependency artifact kinds — all must be present in the workspace.
+# These are fetched and alias-resolved before document generation.
+depends_on:
+  hard:
+    - cam.asset.raina_input
+    - cam.catalog.data_source_inventory
+    - cam.workflow.business_flow_catalog
+    - cam.data.model_logical
+    - cam.architecture.pipeline_patterns
+    - cam.data.dataset_contract
+    - cam.workflow.transform_spec
+    - cam.workflow.batch_job_spec
+    - cam.workflow.stream_job_spec
+    - cam.workflow.orchestration_spec
+    - cam.data.lineage_map
+    - cam.governance.data_governance_policies
+    - cam.security.data_access_control
+    - cam.security.data_masking_policy
+    - cam.qa.data_sla
+    - cam.observability.data_observability_spec
+    - cam.deployment.data_platform_topology
+    - cam.catalog.tech_stack_rankings
+    - cam.catalog.data_products
+    - cam.workflow.data_pipeline_architecture
+    - cam.deployment.pipeline_deployment_plan
+  soft: []
+
+# Related asset IDs that will be linked in the output artifact metadata
+related_assets:
+  - id: cam.workflow.data_pipeline_architecture
+    relation: grounds
+  - id: cam.architecture.pipeline_patterns
+    relation: cites
+  - id: cam.data.lineage_map
+    relation: cites
+  - id: cam.deployment.pipeline_deployment_plan
+    relation: drives

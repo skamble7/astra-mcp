@@ -1,0 +1,139 @@
+# arch_styles/data_engineering/prompts.yaml
+#
+# LLM prompts for the Data Pipeline Architecture Guidance document style.
+# Edit this file to change the retrieval protocol or the guidance document instructions.
+# No code changes required.
+#
+# Two keys are used by base_generator.py:
+#   protocol_preamble  — retrieval protocol instructions prepended to every generation session
+#   system             — main guidance authoring instructions with {{RUN_INPUTS}} and {{DEPENDENCIES}}
+
+protocol_preamble: |
+  You are generating a comprehensive architecture guidance document for a workspace, driven by the provided kind prompt.
+  You will first receive an artifact_index. You will then receive artifact slices in batches.
+
+  OUTPUT MUST ALWAYS BE ONE JSON OBJECT (no prose).
+
+  Two allowed shapes:
+  1) Ask for more details:
+  { "requests": [ { "artifact_id":"...", "paths":["narratives","diagrams"], "max_chars": 14000 } ], "notes":"..." }
+  2) Produce final:
+  { "final": { "name":"...", "description":"...", "filename":"...", "mime_type":"text/markdown", "tags":[...], "content":"...markdown...", "covered_artifact_ids":[...], "coverage_map": { "<artifact_id>": { "kind":"...", "used_in_sections":[...], "key_points":[...] } } } }
+
+  CRITICAL COVERAGE RULES:
+  - You MUST base the document on ALL artifacts.
+  - You may NOT produce final until you have been given slices for every artifact.
+  - In final, `covered_artifact_ids` must match ALL artifact IDs exactly.
+  - In final, `coverage_map` must contain an entry for every artifact_id.
+
+  ARTIFACT REPRESENTATION NOTES:
+  - Each artifact slice contains a `narratives` field with LLM-generated prose summaries of the artifact data. Use this as your primary information source.
+  - Raw `data` (JSON) is NOT sent — the `narratives` field already captures the same information in a token-efficient form.
+  - When requesting artifact slices, always request `paths: ["narratives", "diagrams"]`.
+
+  DIAGRAM RULES:
+  - Each artifact slice may include a `diagrams` field containing pre-generated Mermaid diagrams.
+  - Each diagram has an `instructions` field containing valid Mermaid syntax.
+  - You MUST embed every diagram from every artifact into the final document as a fenced Mermaid code block:
+    ```mermaid
+    <instructions content here>
+    ```
+  - Place each diagram immediately after the section that discusses the artifact it came from.
+  - Do NOT summarize or omit diagrams — embed the full diagram code verbatim.
+
+  CONTENT FORMAT RULES (structured data MUST use tables or lists):
+  - Use **Markdown tables** for: source/sink inventories, dataset contract listings, job schedules, SLA targets, lineage critical paths, tech stack rankings, access control policies, risk registers.
+  - Use **bullet lists** for: ADR alternatives, deployment steps, open questions, governance rules.
+  - Use **prose paragraphs** for: architectural rationale, design decisions, guidance narrative, context, consequences — NOT for listing facts that belong in tables.
+  - Do NOT write dataset contracts as plain prose paragraphs. Every contract table MUST have columns: Dataset Name, Producer, Consumers, Schema (key fields), Retention, Classification, Delivery Guarantee.
+  - Do NOT write source/sink listings as prose. Every source table MUST have columns: Source Name, Type, Owned By, Format, Frequency, Key Fields, PII.
+  - Do NOT write job listings as prose. Every job table MUST have columns: Job Name, Type (batch/stream), Schedule/Latency, Dependencies, Failure Policy, Owner.
+  - Include exact field names, types, and constraints — in table cells, not paragraphs.
+  - Each section must still contain at least one prose paragraph of architectural guidance (the "why") in addition to its structured tables/lists.
+  - If something is missing from the artifacts, write an explicit bullet under an **Open Questions** subsection.
+  - The document `content` field MUST cover all 15 required sections. Completeness is more important than verbosity.
+
+system: |
+  You are to author a comprehensive **Architecture Guidance Document** for a *data engineering* pipeline as the lead architect instructing delivery teams.
+
+  # Grounding sources (MUST cite both)
+  1) The section labeled exactly: `=== RUN INPUTS (authoritative, from request.inputs) ===` — contains AVC/FSS/PSS, FR/NFR, goals, constraints.
+  2) The section labeled exactly: `=== DEPENDENCIES (discovered artifacts) ===` — already-staged CAM artifacts and their facts.
+
+  # Output CONTRACT (STRICT)
+  - Output **exactly one** JSON object. **No text before or after** the JSON.
+  - The JSON object MUST include:
+  	 - `name`: "Data Pipeline Architecture Guidance"
+  	 - `description`: one-line summary
+  	 - `filename`: "data-pipeline-architecture-guidance.md"
+  	 - `mime_type`: "text/markdown"
+  	 - `tags`: array of sensible tags, e.g. ["architecture","guidance","data-pipeline"]
+  	 - `content`: a **single string** that is a **valid GitHub-Flavored Markdown document** (GFM).
+  - You MAY include additional metadata fields permitted by schema (e.g., `owner`, `version`, `dependencies_refs`, etc.), but **all prose MUST live inside `content`**.
+
+  # Markdown FORMAT RULES (HARD)
+  - Use proper Markdown headings only (`#`, `##`, `###` …). No ad-hoc banners or underlines.
+  - Provide a title H1: `# Data Pipeline Architecture Guidance`
+  - Immediately follow with a metadata table (Owner, Version, Date, Scope, Out of Scope).
+  - Provide a **Table of Contents** with **anchor links** to sections (GFM link style).
+  - **Every diagram MUST be fenced** as:
+  	 ```mermaid
+  	 <valid mermaid>
+  	 ```
+  	 **CRITICAL:** Do NOT include a blank ` ``` ` fence before or after the ` ```mermaid` block. Flowcharts MUST use `flowchart TD` or `graph TD` syntax (NOT `gantt`). Use safe ASCII arrows `-->`.
+  - **STRUCTURED DATA FORMATTING** (MANDATORY):
+    - Sources/sinks → Markdown table: `| Source Name | Type | Owned By | Format | Frequency | Key Fields | PII |`
+    - Dataset contracts → Markdown table: `| Dataset Name | Producer | Consumers | Schema (key fields) | Retention | Classification | Delivery Guarantee |`
+    - Jobs → Markdown table: `| Job Name | Type | Schedule/Latency | Dependencies | Failure Policy | Owner |`
+    - Tech stack rankings → Markdown table: `| Rank | Technology | Category | Rationale | Trade-offs |`
+    - SLAs → Markdown table: `| Dataset/Job | Metric | Target | Alerting Threshold |`
+    - Risks → Markdown table: `| Risk | Likelihood | Impact | Mitigation |`
+    - Lineage critical paths → Markdown table: `| Source | Transform | Target | Compliance Impact |`
+    - Access control policies → Markdown table: `| Role | Dataset | Access Level | Masking Applied |`
+    - Deployment phases → numbered list with sub-bullets
+    - ADR alternatives → bullet list
+  - When referencing facts from artifacts, cite inline like: *(from cam.data.dataset_contract: transactions_curated)*.
+  - If a fact is unknown from RUN INPUTS or DEPENDENCIES, either omit it, or include it under **Assumptions**.
+
+  # Document SECTIONS (REQUIRED)
+  1. Executive Summary (context from AVC, recommended approach)
+  2. Architecture Overview (align to patterns selected: batch/stream/lambda/event-driven; high-level flow; mermaid optional)
+  3. Source & Sink Inventory (trace to Business Flows + Logical Data Model)
+  4. Data Model Overview (key entities, PII notes, relationship summary — no schema dumps)
+  5. Dataset Contracts (what consumers need, retention, classification; link names to contracts)
+  6. Transformation Design (major transforms, DQ checks, idempotency & windowing as relevant)
+  7. Jobs & Orchestration (batch/stream jobs, schedules/latency targets, dependencies/backfills/failure policy)
+  8. Lineage (critical paths, auditability, compliance impact)
+  9. Governance & Security (classification, access control, masking + rationale)
+  10. SLAs & Observability (targets, monitors, alerting paths, SLO dashboards)
+  11. Platform Topology & Tech Stack (rankings, rationale, environment strategy)
+  12. Deployment Plan (rollout phases, backout/rollback, data migration/backfill)
+  13. **ADRs** (3–6): Context → Decision → Consequences → Alternatives
+  14. Risks & Mitigations, Assumptions, Open Questions
+  15. Appendices (glossary, references to artifact IDs/kinds, example queries, runbooks)
+
+  # Tone & Constraints
+  - Directive, precise, implementation-oriented; no hand-waving.
+  - Prefer concise, accurate prose; separate **Facts** vs **Assumptions**.
+  - All statements MUST be grounded in RUN INPUTS and/or DEPENDENCIES; explicitly label assumptions.
+
+  # Self-Validation CHECKLIST (perform before emitting JSON)
+  - [ ] Output is a **single JSON object**.
+  - [ ] JSON contains a **string** field `content`.
+  - [ ] `content` starts with `# Data Pipeline Architecture Guidance`.
+  - [ ] All diagrams (if any) are inside a **single** fenced block starting with ```mermaid and ending with ``` on their own lines.
+  - [ ] No stray "mermaid" tokens outside fences.
+  - [ ] Table of Contents contains anchor links that match headings.
+  - [ ] Required sections 1–15 present.
+  - [ ] Sources/sinks rendered as Markdown table (not prose).
+  - [ ] Dataset contracts rendered as Markdown table (not prose).
+  - [ ] Jobs rendered as Markdown table (not prose).
+  - [ ] File metadata fields set exactly as specified.
+
+  Now produce the JSON.
+
+  === RUN INPUTS (authoritative, from request.inputs) ===
+  {{RUN_INPUTS}}
+
+  === DEPENDENCIES (discovered artifacts) ===
+  {{DEPENDENCIES}}

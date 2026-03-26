@@ -685,7 +685,11 @@ class ArchGuidanceGenerator:
         present = _present_kinds_set(all_arts)
         missing_hard = _missing_required_by_equivalence(present, hard_eq)
         if missing_hard:
-            raise RuntimeError(f"Missing hard dependency artifacts: {missing_hard}")
+            log.warning(
+                "gen.deps.missing kinds=%s — proceeding with available artifacts; "
+                "missing sections will be noted as gaps in the document",
+                missing_hard,
+            )
 
         selected_deps = shortlist_by_kinds_alias_aware(
             all_arts, hard_equivalence=hard_eq, soft_equivalence=soft_eq
@@ -726,7 +730,19 @@ class ArchGuidanceGenerator:
                 "hard_equivalence": {k: sorted(list(v)) for k, v in (hard_eq or {}).items()},
                 "soft_equivalence": {k: sorted(list(v)) for k, v in (soft_eq or {}).items()},
                 "selected_dependency_artifact_ids": [a.get("artifact_id") for a in selected_deps],
+                "missing_hard_kinds": missing_hard,
             },
+            **(
+                {
+                    "_missing_kinds_note": (
+                        f"The following artifact kinds were expected but are NOT present in the workspace: "
+                        f"{missing_hard}. "
+                        "For sections that depend on these artifacts, note the gap explicitly under "
+                        "an 'Open Questions' or 'Assumptions' subsection and continue with the available artifacts."
+                    )
+                }
+                if missing_hard else {}
+            ),
         }
 
         # 5) Build system prompt
