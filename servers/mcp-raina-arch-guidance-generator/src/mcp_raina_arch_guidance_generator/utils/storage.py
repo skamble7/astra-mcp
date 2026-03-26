@@ -16,26 +16,30 @@ log = logging.getLogger("mcp.raina.arch.guidance.storage")
 
 def _build_client(settings: Settings, *, endpoint_override: str | None = None):
     """
-    Create a boto3 S3 client for Garage (S3-compatible).
-    Uses path-style addressing by default.
+    Create a boto3 S3 client.
 
-    If endpoint_override is provided, it will be used as the endpoint_url.
-    This is important for SigV4: the final URL's host must match the host
-    used during signing, so when generating presigned URLs for public use,
-    pass the public base (e.g., http://localhost:3900) here.
+    - For AWS S3: leave S3_ENDPOINT_URL unset; boto3 routes to the real AWS endpoint
+      using virtual-hosted-style addressing (the AWS default).
+    - For Garage / MinIO / other S3-compatible stores: set S3_ENDPOINT_URL to the
+      store's address; path-style addressing is used (required by most self-hosted stores).
+
+    If endpoint_override is provided, it is used as the endpoint_url (e.g., when
+    generating presigned URLs that must be signed against the public-facing endpoint).
     """
+    endpoint = endpoint_override or settings.s3_endpoint_url
+    # Use path-style only for custom (non-AWS) endpoints; AWS prefers virtual-hosted.
+    addressing_style = "path" if endpoint else "auto"
     cfg = Config(
-        region_name=settings.s3_region or "garage",
-        s3={"addressing_style": "path"},
+        region_name=settings.s3_region or "us-east-1",
+        s3={"addressing_style": addressing_style},
         retries={"max_attempts": 3, "mode": "standard"},
         signature_version="s3v4",
     )
     session = boto3.session.Session(
         aws_access_key_id=settings.s3_access_key,
         aws_secret_access_key=settings.s3_secret_key,
-        region_name=settings.s3_region or "garage",
+        region_name=settings.s3_region or "us-east-1",
     )
-    endpoint = endpoint_override or settings.s3_endpoint_url
     return session.client("s3", endpoint_url=endpoint, config=cfg)
 
 
