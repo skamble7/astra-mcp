@@ -40,7 +40,7 @@ async def fetch_workspace_artifacts(workspace_id: str) -> List[Dict[str, Any]]:
     wid_enc = quote(wid, safe="")
 
     settings = Settings.from_env()
-    base = settings.artifact_service_url.rstrip("/")
+    base = settings.workspace_manager_url.rstrip("/")
 
     limit = 50
     offset = 0

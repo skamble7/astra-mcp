@@ -39,7 +39,8 @@ class Settings:
         return bool(self.config_ref)
 
     # Services
-    artifact_service_url: str = "http://localhost:9020"
+    artifact_service_url: str = "http://localhost:9020"    # kind registry
+    workspace_manager_url: str = "http://localhost:9027"   # workspace artifact storage
 
     # S3 / GarageHQ
     s3_enabled: bool = False
@@ -83,6 +84,7 @@ class Settings:
         llm_retry_backoff_max = _float_env("LLM_RETRY_BACKOFF_MAX", 10.0)
 
         svc_url = os.getenv("ARTIFACT_SERVICE_URL", "http://localhost:9020").strip() or "http://localhost:9020"
+        workspace_manager_url = os.getenv("WORKSPACE_MANAGER_URL", "http://localhost:9027").strip() or "http://localhost:9027"
 
         s3_endpoint_url = (os.getenv("S3_ENDPOINT_URL") or os.getenv("GARAGE_S3_ENDPOINT") or "").strip() or None
         s3_region = (os.getenv("S3_REGION") or os.getenv("GARAGE_S3_REGION") or "garage").strip()
@@ -118,6 +120,7 @@ class Settings:
             llm_retry_backoff_initial=llm_retry_backoff_initial,
             llm_retry_backoff_max=llm_retry_backoff_max,
             artifact_service_url=svc_url,
+            workspace_manager_url=workspace_manager_url,
             s3_enabled=s3_enabled,
             s3_endpoint_url=s3_endpoint_url,
             s3_region=s3_region,

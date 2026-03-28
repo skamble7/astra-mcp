@@ -87,6 +87,7 @@ services:
       # --- Services ---
       # Artifact service is in a separate compose; talk to the host-published port
       ARTIFACT_SERVICE_URL: http://host.docker.internal:9020
+      WORKSPACE_MANAGER_URL: http://host.docker.internal:9027
 
       # --- Output directory inside the container ---
       OUTPUT_DIR: /out
@@ -179,6 +180,7 @@ services:
 
       # --- Services ---
       ARTIFACT_SERVICE_URL: http://host.docker.internal:9020
+      WORKSPACE_MANAGER_URL: http://host.docker.internal:9027
 
       # --- Output directory inside the container ---
       OUTPUT_DIR: /out

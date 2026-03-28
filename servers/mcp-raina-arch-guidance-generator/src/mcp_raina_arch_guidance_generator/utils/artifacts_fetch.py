@@ -43,7 +43,7 @@ async def fetch_workspace_artifacts(
 
     wid = (workspace_id or "").strip()
     wid_enc = quote(wid, safe="")
-    base = settings.artifact_service_url.rstrip("/")
+    base = settings.workspace_manager_url.rstrip("/")
 
     limit = 50
     offset = 0
